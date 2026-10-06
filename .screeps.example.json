@@ -1,0 +1,5 @@
+{
+  "token": "YOUR_AUTH_TOKEN",
+  "branch": "default",
+  "host": "https://screeps.com"
+}
