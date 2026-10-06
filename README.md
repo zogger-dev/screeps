@@ -32,24 +32,60 @@ src/
   types.d.ts         Memory typings (CreepMemory, Role)
   managers/
     planner.ts       places construction sites for what the room's RCL allows
-    spawner.ts       population targets + body sizing per room, spawn labels
+    retirement.ts    walks surplus/outdated creeps to a spawn to be recycled
+    spawner.ts       demand-based spawn queue per post, tier upgrades, recovery, spawn labels
     towers.ts        defend / heal
-  roles/             one file per creep role, registered in roles/index.ts
-    harvester.ts     mine -> fill spawn/extensions/towers (falls back to building)
-    upgrader.ts      collect energy -> upgrade controller
-    builder.ts       collect energy -> build -> repair (falls back to upgrading)
+  roles/             one file per creep type, registered in roles/index.ts
+    drone.ts    WORK~CARRY: gathers, then fills/builds/repairs/upgrades by need
+    miner.ts         5 WORK, no CARRY: sits on a source container and mines
+    worker.ts    WORK-heavy, 1 CARRY: stands by the controller container and upgrades
+    hauler.ts        CARRY+MOVE: source container -> spawn/extensions/towers/controller container
   utils/
+    body.ts          body tiers per creep type
+    census.ts        per-tick creep lists by home room
     construction.ts  build order for construction sites
     energy.ts        working-state toggle, source assignment, energy collection
     memory.ts        dead-creep / finished-site memory cleanup
+    mining.ts        when a source goes static, income, hauler counts
     safety.ts        danger zones around hostiles and keeper lairs, safe movement
-    sources.ts       harvest spots per source
+    settings.ts      tuning knobs overridable from the console
+    sources.ts       harvest spots, source and controller containers
+```
+
+### Creep types and the economy
+
+Creeps are typed by body shape, not job. Any creep can do any task its parts allow; the shape just
+makes it better at some. Drones cover for missing miners and workers.
+
+| Type       | Tiers (energy cost)                                 | Best at                                                       |
+| ---------- | --------------------------------------------------- | ------------------------------------------------------------- |
+| drone      | (2W 1C 1M) x1-4: 300, 600, 900, 1200                | Anything: fill spawn (until haulers exist), upgrade, build, repair, harvest |
+| miner      | 5W 1M (550), never bigger                           | Mining a source from its container (RCL 2+)                   |
+| worker     | 6W 1C 3M (800); 10W 1C 3M (1200); 15W 2C 4M (1800) | Upgrading from the controller container (RCL 3+)              |
+| hauler     | (1C 1M) x2-16: 200 ... 1600                          | Source container -> spawn/extensions/towers -> controller container |
+
+Bodies grow in tiers (`utils/body.ts`); the spawner always builds the biggest tier the room can
+afford. Outdated creeps keep working until up-to-date replacements cover their job, then walk to a
+spawn and get recycled.
+
+Sources start with drones harvesting. Once the room can afford a miner and the source's
+container is built, the source gets a miner plus enough haulers for its distance, and drones
+stop harvesting there. Once static sources exist, the controller container is built and the room
+can afford a worker (RCL 3), workers spend a share of that income on upgrading.
+
+### Tuning
+
+The drone/worker mix is meant to be experimented with. Override any knob from the in-game
+console; unset keys use the defaults in `utils/settings.ts`:
+
+```js
+Memory.settings = { minDrones: 2, builders: 2, upgradeShare: 0.6 };
 ```
 
 ### Build priorities
 
 Builders work on the highest-priority site first (lower number = sooner), closest first among ties.
-Defaults by type: spawn 0, extension 1, tower 2, container 3, storage 4, other 10, road 20, rampart 30, wall 31.
+Defaults by type: spawn 0, extension 1, container 1, tower 2, storage 4, other 10, road 20, rampart 30, wall 31.
 Override a single site from the in-game console:
 
 ```js
@@ -59,8 +95,8 @@ Memory.constructionSites["<site id>"] = { priority: 0 };
 
 Overrides are cleaned up automatically once the site is finished.
 
-### Adding a role
+### Adding a creep type
 
-1. Add the name to the `Role` union in `src/types.d.ts`.
+1. Add the name to the `CreepType` union in `src/types.d.ts` and its tiers in `utils/body.ts`.
 2. Create `src/roles/<name>.ts` exporting a `RoleDef`.
-3. Register it in `src/roles/index.ts` and give it a target in `managers/spawner.ts`.
+3. Register it in `src/roles/index.ts` and give it steps in `managers/spawner.ts`.

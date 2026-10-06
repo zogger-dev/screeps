@@ -1,9 +1,15 @@
 import { avoidThreats, isSafe, safeSources } from "../utils/safety";
+import { sourceContainer } from "../utils/sources";
 
 /** Placement is cheap, but there's no need to re-plan every tick. */
 const PLAN_INTERVAL = 25;
 /** Cap on our open sites per room so builders finish things instead of spreading thin. */
 const MAX_PENDING_SITES = 5;
+/**
+ * Roads get a separate cap. They're the lowest build priority, so if they shared the main cap,
+ * a batch of road sites would block containers and extensions until every road was finished.
+ */
+const MAX_PENDING_ROADS = 3;
 /** How far from the spawn the structure grid may extend. */
 const MAX_GRID_RANGE = 12;
 /** Roads and containers cost a lot of build energy; skip them until extensions are available. */
@@ -26,11 +32,15 @@ interface PlanContext {
   occupied: Set<number>;
   /** Tiles kept clear: next to sources/minerals (harvest spots) and the controller (upgrade spots). */
   reserved: Set<number>;
-  /** How many more sites we may place this run. */
+  /** How many more non-road sites we may place this run. */
   budget: number;
+  /** How many more road sites we may place this run. */
+  roadBudget: number;
 }
 
 const key = (x: number, y: number) => x * 50 + y;
+const isRoad = (s: ConstructionSite) => s.structureType === STRUCTURE_ROAD;
+const isNotRoad = (s: ConstructionSite) => !isRoad(s);
 
 function createContext(room: Room, anchor: RoomPosition): PlanContext {
   const occupied = new Set<number>();
@@ -51,7 +61,8 @@ function createContext(room: Room, anchor: RoomPosition): PlanContext {
     terrain: room.getTerrain(),
     occupied,
     reserved,
-    budget: MAX_PENDING_SITES - room.find(FIND_MY_CONSTRUCTION_SITES).length,
+    budget: MAX_PENDING_SITES - room.find(FIND_MY_CONSTRUCTION_SITES, { filter: isNotRoad }).length,
+    roadBudget: MAX_PENDING_ROADS - room.find(FIND_MY_CONSTRUCTION_SITES, { filter: isRoad }).length,
   };
 }
 
@@ -70,8 +81,10 @@ function isOpen(ctx: PlanContext, x: number, y: number): boolean {
 }
 
 function place(ctx: PlanContext, x: number, y: number, type: BuildableStructureConstant): boolean {
-  if (ctx.budget <= 0 || ctx.room.createConstructionSite(x, y, type) !== OK) return false;
-  ctx.budget--;
+  const road = type === STRUCTURE_ROAD;
+  if ((road ? ctx.roadBudget : ctx.budget) <= 0 || ctx.room.createConstructionSite(x, y, type) !== OK) return false;
+  if (road) ctx.roadBudget--;
+  else ctx.budget--;
   ctx.occupied.add(key(x, y));
   return true;
 }
@@ -115,6 +128,38 @@ function planGrid(ctx: PlanContext): void {
   }
 }
 
+/**
+ * A container next to each safe source, on the side nearest the spawn. A source only switches to
+ * a static miner once its container is built, so these go down as soon as containers are worth it.
+ */
+function planSourceContainers(ctx: PlanContext): void {
+  for (const source of safeSources(ctx.room)) {
+    if (allowance(ctx, STRUCTURE_CONTAINER) <= 0 || ctx.budget <= 0) return;
+    const pending = source.pos.findInRange(FIND_CONSTRUCTION_SITES, 1, {
+      filter: (s) => s.structureType === STRUCTURE_CONTAINER,
+    });
+    if (sourceContainer(source) || pending.length > 0) continue;
+
+    // Harvest-spot tiles are reserved for other structures, so check them directly here.
+    let best: [number, number] | null = null;
+    let bestRange = Infinity;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const x = source.pos.x + dx;
+        const y = source.pos.y + dy;
+        if (x < 1 || x > 48 || y < 1 || y > 48) continue;
+        if (ctx.terrain.get(x, y) === TERRAIN_MASK_WALL || ctx.occupied.has(key(x, y))) continue;
+        const range = ctx.anchor.getRangeTo(x, y);
+        if (range < bestRange) {
+          best = [x, y];
+          bestRange = range;
+        }
+      }
+    }
+    if (best) place(ctx, best[0], best[1], STRUCTURE_CONTAINER);
+  }
+}
+
 /** One container within upgrade range of the controller, on the side nearest the spawn. */
 function planControllerContainer(ctx: PlanContext): void {
   const controller = ctx.room.controller;
@@ -150,14 +195,14 @@ function planRoads(ctx: PlanContext): void {
   if (ctx.room.controller) destinations.push(ctx.room.controller);
 
   for (const dest of destinations) {
-    if (ctx.budget <= 0) return;
+    if (ctx.roadBudget <= 0) return;
     const { path } = PathFinder.search(
       ctx.anchor,
       { pos: dest.pos, range: 1 },
       { plainCost: 2, swampCost: 10, maxRooms: 1, roomCallback: (roomName) => roadCosts(roomName) },
     );
     for (const step of path) {
-      if (ctx.budget <= 0) return;
+      if (ctx.roadBudget <= 0) return;
       if (!ctx.occupied.has(key(step.x, step.y)) && isSafe(step)) place(ctx, step.x, step.y, STRUCTURE_ROAD);
     }
   }
@@ -194,8 +239,10 @@ export function runPlanner(room: Room): void {
   if (!spawn) return;
 
   const ctx = createContext(room, spawn.pos);
-  if (ctx.budget <= 0) return;
 
+  // Source containers go first: with only MAX_PENDING_SITES at a time, extensions would
+  // otherwise take every slot and delay the switch to static miners.
+  if (ctx.rcl >= INFRASTRUCTURE_RCL) planSourceContainers(ctx);
   planGrid(ctx);
   if (ctx.rcl >= INFRASTRUCTURE_RCL) {
     planControllerContainer(ctx);

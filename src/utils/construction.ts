@@ -2,8 +2,9 @@
 const TYPE_PRIORITY: Partial<Record<BuildableStructureConstant, number>> = {
   [STRUCTURE_SPAWN]: 0,
   [STRUCTURE_EXTENSION]: 1,
+  // Source containers gate the switch to static miners, so they rank with extensions.
+  [STRUCTURE_CONTAINER]: 1,
   [STRUCTURE_TOWER]: 2,
-  [STRUCTURE_CONTAINER]: 3,
   [STRUCTURE_STORAGE]: 4,
   [STRUCTURE_ROAD]: 20,
   [STRUCTURE_RAMPART]: 30,

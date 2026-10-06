@@ -1,9 +1,10 @@
-import { builder } from "./builder";
-import { harvester } from "./harvester";
-import { upgrader } from "./upgrader";
+import { drone } from "./drone";
+import { hauler } from "./hauler";
+import { miner } from "./miner";
+import { worker } from "./worker";
 
 export interface RoleDef {
   run(creep: Creep): void;
 }
 
-export const roles: Record<Role, RoleDef> = { harvester, upgrader, builder };
+export const roles: Record<CreepType, RoleDef> = { drone, miner, worker, hauler };

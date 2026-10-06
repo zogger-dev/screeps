@@ -1,4 +1,5 @@
 import { runPlanner } from "./managers/planner";
+import { runRetirement } from "./managers/retirement";
 import { runSpawner } from "./managers/spawner";
 import { runTowers } from "./managers/towers";
 import { roles } from "./roles";
@@ -16,16 +17,17 @@ export const loop = (): void => {
 
   for (const creep of Object.values(Game.creeps)) {
     if (creep.spawning) continue;
-    const role = roles[creep.memory.role];
+    const role = roles[creep.memory.type];
     if (!role) {
-      console.log(`${creep.name} has unknown role "${creep.memory.role}"`);
+      console.log(`${creep.name} has unknown type "${creep.memory.type}"`);
       continue;
     }
     // Isolate failures so one misbehaving creep doesn't stop the rest of the tick.
     try {
+      if (runRetirement(creep)) continue;
       role.run(creep);
     } catch (err) {
-      console.log(`${creep.name} (${creep.memory.role}) error: ${(err as Error).stack ?? err}`);
+      console.log(`${creep.name} (${creep.memory.type}) error: ${(err as Error).stack ?? err}`);
     }
   }
 };
