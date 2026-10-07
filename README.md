@@ -31,6 +31,8 @@ src/
   main.ts            game loop: memory cleanup -> per-room managers -> per-creep roles
   types.d.ts         Memory typings (CreepMemory, Role)
   bodies/            body tiers per creep type, one file each (drone, miner, worker, hauler)
+  defense/           defense planning: min-cut outer ring, tower spots, core site (analysis only)
+  plan/              room zones and development order (analysis only)
   logistics/         energy flow network, lane capacity, route assignment, traffic (docs/logistics.md)
   managers/
     logistics.ts     re-plans drone routes every 50 ticks or when one goes stale
@@ -115,6 +117,46 @@ which can free up the guarded source. Until the lair is enclosed, nothing else i
 sites there are removed). Once enclosed, a guarded source is worked from whichever harvest spots are
 out of the trapped keeper's reach. Towers stop shooting trapped keepers. Only possible in rooms
 we own; real Source Keeper rooms can't be claimed.
+
+### Defense planning (analysis only, nothing is built yet)
+
+`defense("sim")` in the console plans the room's defenses on its terrain and stores the plan in
+`Memory.defense`; `Memory.settings.showDefense = true` draws it.
+
+- Outer ring: the minimum set of tiles (max-flow min-cut on the tile graph) separating the exits
+  from everything at least 6 tiles in, plus sources, minerals, spawns and the controller. Walls go
+  at least 2 tiles in, the closest buildable to an exit, so nearly the whole room stays ours.
+- Tower spots (6 at RCL 8), in build order: each gives the best damage profile over the ring and
+  spawns, weakest point first (leximin), so towers spread to cover every wall rather than pile up;
+  among inside tiles more than 3 tiles from anywhere attackers can stand (ranged attacks ignore
+  walls, so that's what keeps a tower out of reach).
+
+### Core site (analysis only)
+
+`core("sim")` finds candidate pockets for the room's core and lists them, best first; the best is
+used automatically, `core("sim", n)` overrides to candidate n and `core("sim", 0)` goes back to
+automatic. `Memory.settings.showCore = true` draws the chosen pocket's inner ring and numbers the
+other candidates.
+
+- Candidates: centres of open ground, most open first, each at least 8 steps on foot from the
+  others, so every distinct area (including pockets behind ridges) gets one.
+- Each pocket's inner ring is a min-cut between the tiles within 5 steps of its centre and
+  everything 13+ steps away, so it lands on the narrowest entrances in between.
+- Scoring: a pocket needs 45 safe tiles (out of ranged reach from outside its ring) to fit a core;
+  among those, cost = 10 x ring tiles + steps to the sources and controller. Lowest wins.
+
+### Zones and the planning harness (analysis only)
+
+`zones("sim")` partitions the room into zones and orders their development; `showZones` tints
+them and numbers them in order. Zones come from a watershed on openness (open areas meet at the
+narrowest passages), with oversized regions split along their shortest dividing line (min-cut) and
+neighbours with long shared borders merged, so zones are 30-350 tiles separated along short lines.
+Development starts with the spawn's zone, then the rest by value (space x defensibility, sources,
+controller) minus distance, until the developed zones can hold a full base (~1100 tiles).
+
+`npm run plan:rooms [-- ROOM ...]` runs the planner offline on real rooms: it fetches terrain and
+objects from the official server's public API, caches them in `tools/rooms/`, and renders a contact
+sheet to `tools/out/zones.png`. `terrain("sim")` in the console exports a room as a fixture.
 
 ### Build priorities
 

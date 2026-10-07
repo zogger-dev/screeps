@@ -4,6 +4,10 @@ const DEFAULTS: Settings = {
   spotUtilization: 0.5,
   minRouteReturn: 3,
   showRoutes: false,
+  showDefense: false,
+  towerExposureCost: 3,
+  showCore: false,
+  showZones: false,
   upgradeShare: 0.6,
 };
 

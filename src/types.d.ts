@@ -65,6 +65,34 @@ interface Memory {
   constructionSites?: Record<string, { priority: number }>;
   /** Tuning knobs, settable from the console. See utils/settings.ts. */
   settings?: Partial<Settings>;
+  /**
+   * Extra areas the towers should cover, beyond the spawn pocket, controller and core, e.g.
+   * planned extension fields. Shared by every room's defense plan; see defense/towers.ts.
+   */
+  defenseTargets?: DefenseTarget[];
+  /** Zone partitions per room, computed on request with `zones("room")`. See plan/zones.ts. */
+  zones?: Record<string, import("./plan/zones").Partition>;
+  /** Defense plans per room, computed on request with `defense("room")`. See defense/plan.ts. */
+  defense?: Record<string, import("./defense/plan").DefensePlan>;
+  /**
+   * Core site candidates per room, best first, computed with `core("room")`; `pick` (1-based)
+   * overrides the automatic choice. See defense/core.ts.
+   */
+  core?: Record<string, { candidates: import("./defense/core").CoreCandidate[]; pick?: number; computedAt: number }>;
+}
+
+/** A custom tower target: an area (e.g. an extension field) or a pocket's entrances. */
+interface DefenseTarget {
+  name: string;
+  /** Room it's in; omitted means every room. */
+  room?: string;
+  x: number;
+  y: number;
+  /** Level from which it matters (when what it protects gets built). */
+  fromRcl: number;
+  /** "area": walkable tiles within `radius` of (x, y). "entrances": the ring of the pocket around (x, y). */
+  kind: "area" | "entrances";
+  radius?: number;
 }
 
 interface Settings {
@@ -85,6 +113,17 @@ interface Settings {
   minRouteReturn: number;
   /** Draw the logistics plan's routes in the room. */
   showRoutes: boolean;
+  /**
+   * Damage-per-tick equivalent of each tile an attacker could shoot a tower from: how strongly tower
+   * placement prefers nooks in the rock over coverage (a fully open spot has 49 such tiles).
+   */
+  towerExposureCost: number;
+  /** Draw the defense plan (outer ring and tower spots) in the room. */
+  showDefense: boolean;
+  /** Draw the chosen core pocket (inner ring) and the other candidates in the room. */
+  showCore: boolean;
+  /** Tint the room's zones and number them in development order. */
+  showZones: boolean;
   /** Share of static-source income spent by worker upgraders. */
   upgradeShare: number;
 }

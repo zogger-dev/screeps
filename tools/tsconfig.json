@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "rootDir": "../src",
+    "outDir": "out",
+    "noEmit": false
+  },
+  "include": ["../src/types.d.ts", "../src/plan/zones.ts"]
+}
