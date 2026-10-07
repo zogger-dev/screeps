@@ -1,4 +1,6 @@
+import { wantedDrones } from "../managers/logistics";
 import { homeCreeps } from "../utils/census";
+import { setting } from "../utils/settings";
 import { buildNetwork } from "./network";
 
 const fmt = (n: number) => (isFinite(n) ? n.toFixed(2) : "inf");
@@ -25,7 +27,11 @@ export function logisticsReport(roomName: string): string {
     const key = r ? `${r.from} -> ${r.kind}${r.target ? `:${r.target}` : ""}` : "(no route)";
     routes.set(key, (routes.get(key) ?? 0) + 1);
   }
-  lines.push(`Drones (${drones.length}):`);
+  const wanted = wantedDrones(roomName);
+  lines.push(
+    `Drones (${drones.length}; plan can use ${wanted ?? "? (no plan yet)"}, ` +
+      `kept within ${setting("minDrones")}..${setting("maxDrones")}):`,
+  );
   for (const [key, n] of [...routes].sort()) lines.push(`  ${n} x ${key}`);
   return lines.join("\n");
 }

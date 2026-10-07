@@ -72,7 +72,9 @@ makes it better at some. Drones cover for missing miners and workers.
 | hauler     | (1C 1M) x2-16: 200 ... 1600                          | Source container -> spawn/extensions/towers -> controller container |
 
 Bodies grow in tiers (`src/bodies/`); the spawner always builds the biggest tier the room can
-afford. Outdated creeps keep working until up-to-date replacements cover their job, then walk to a
+afford. Miners, haulers and workers are pre-spawned: once one has less life left than its
+replacement needs to spawn and walk to its post (plus a margin), the replacement is built, so the
+post is never empty. Outdated creeps keep working until up-to-date replacements cover their job, then walk to a
 spawn and get recycled.
 
 Sources start with drones harvesting. Once the room can afford a miner and the source's

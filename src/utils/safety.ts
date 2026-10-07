@@ -10,12 +10,23 @@ const TRAPPED_KEEPER_RANGE = 3;
  * to walk clear. Before that, with the keeper dead, its area is safe to work in.
  */
 const LAIR_WARNING_TICKS = 50;
+/**
+ * How far ahead work in a keeper's reach may be planned: roughly a creep's trip across the room,
+ * so it arrives (and waits at a safe tile, loaded) just as the keeper dies.
+ */
+export const STAGING_HORIZON = 100;
+const KEEPER_OWNER = "Source Keeper";
 /** Path cost for unsafe tiles: high enough to route around, but not impassable so creeps can still escape. */
 const DANGER_COST = 250;
 
 interface Threat {
   pos: RoomPosition;
   range: number;
+  /**
+   * Ticks until the threat is gone, if that's known: a Source Keeper dies of old age like any
+   * creep (1500 ticks), and its lair then takes 300 ticks to respawn it.
+   */
+  expiresIn?: number;
 }
 
 let cacheTick = -1;
@@ -38,7 +49,11 @@ function threats(room: Room): Threat[] {
       .find(FIND_HOSTILE_CREEPS, {
         filter: (c) => c.getActiveBodyparts(ATTACK) > 0 || c.getActiveBodyparts(RANGED_ATTACK) > 0,
       })
-      .map((c) => ({ pos: c.pos, range: isTrappedKeeper(c) ? TRAPPED_KEEPER_RANGE : DANGER_RANGE }));
+      .map((c) => ({
+        pos: c.pos,
+        range: isTrappedKeeper(c) ? TRAPPED_KEEPER_RANGE : DANGER_RANGE,
+        expiresIn: c.owner.username === KEEPER_OWNER ? c.ticksToLive : undefined,
+      }));
     for (const lair of keeperLairs(room)) {
       if (isEnclosed(lair)) {
         result.push({ pos: lair.pos, range: TRAPPED_KEEPER_RANGE });
@@ -56,6 +71,18 @@ export function isSafe(pos: RoomPosition, margin = 0): boolean {
   const room = Game.rooms[pos.roomName];
   if (!room) return true;
   return !threats(room).some((t) => t.pos.inRangeTo(pos, t.range + margin));
+}
+
+/**
+ * True if `pos` is safe now, or will be within `horizon` ticks: every threat reaching it is a
+ * keeper about to die of old age. Lets work behind a keeper be planned before its window opens.
+ */
+export function isSafeSoon(pos: RoomPosition, horizon = STAGING_HORIZON): boolean {
+  const room = Game.rooms[pos.roomName];
+  if (!room) return true;
+  return threats(room)
+    .filter((t) => t.pos.inRangeTo(pos, t.range))
+    .every((t) => t.expiresIn !== undefined && t.expiresIn <= horizon);
 }
 
 /**

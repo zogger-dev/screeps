@@ -1,6 +1,8 @@
 import { bodyCost } from "../bodies";
+import { ticksPerTile } from "../utils/movement";
 import { cachedLeg, type Leg } from "../utils/paths";
 import { needsRepair } from "../utils/repair";
+import { isSafe, isSafeSoon } from "../utils/safety";
 import { setting } from "../utils/settings";
 import { CHOKE_LANES } from "./lanes";
 import type { Network, Sink, Supply } from "./network";
@@ -12,6 +14,8 @@ const EPSILON = 0.01;
  * alternative is clearly better, not on every small swing in demand.
  */
 const STICKINESS = 0.8;
+/** Finite jobs within this range of each other form a cluster, served by one creep if need be. */
+const CLUSTER_RANGE = 3;
 
 /** A drone as the planner sees it: a real creep, or a hypothetical one when sizing the fleet. */
 interface Agent {
@@ -26,6 +30,8 @@ interface Agent {
   /** Body cost; spread over the creep's life, it's what a route has to earn back. */
   cost: number;
   pos?: RoomPosition;
+  /** Carrying energy already, so it starts a new route at the sink end rather than the supply. */
+  loaded?: boolean;
   route?: Route;
 }
 
@@ -43,16 +49,6 @@ interface Timing {
   occupancy: number;
   /** Fraction of the cycle the agent occupies each path tile, keyed by x * 50 + y. */
   tiles: Map<number, number>;
-}
-
-/**
- * Ticks to cross a tile: each non-MOVE part adds 2 x factor fatigue per step (CARRY only when
- * loaded) and each MOVE part removes 2 per tick.
- */
-function ticksPerTile(weight: number, move: number, factor: number): number {
-  if (weight === 0) return 1;
-  if (move === 0) return Infinity;
-  return Math.max(1, Math.ceil((weight * factor) / move));
 }
 
 /**
@@ -95,12 +91,19 @@ const onRoute = (agent: Agent, supply: Supply, sink: Sink): boolean => {
   return route !== undefined && route.from === supply.id && route.kind === sink.kind && route.target === sink.target;
 };
 
-/** True if the route still points at things that exist and still need work. */
+/**
+ * True if the route still points at things that exist and still need work, and a site or repair
+ * it works at is still safe: a site may also be about to become safe (a keeper dying of old age),
+ * since its creep waits outside until it is. When a keeper lair's walls stop being safe because the
+ * keeper is due back, the creep is re-planned away rather than walking into it.
+ */
 export function isRouteValid(route: Route | undefined): boolean {
   if (!route || !Game.getObjectById(route.from)) return false;
   if (!route.target) return true;
   const target = Game.getObjectById(route.target);
   if (!target) return false;
+  if (route.kind === "build" && !isSafeSoon(target.pos)) return false;
+  if (route.kind === "repair" && !isSafe(target.pos)) return false;
   return route.kind !== "repair" || needsRepair(target as Structure);
 }
 
@@ -182,11 +185,23 @@ function plan(agents: Agent[], network: Network): Map<string, Assignment> {
    * flow it can carry, or a site near completion would never get finished.
    */
   const worthIt = (agent: Agent, supply: Supply, sink: Sink, cycle: number) => {
+    // A cluster of finite jobs nobody covers yet gets its first creep however far away it is:
+    // we placed those sites to get them built, and some (keeper lair walls, 1 energy each) are
+    // worth far more than the energy they take. Extra creeps still have to earn their keep.
+    if (sink.finite && !clusterCovered(sink)) return true;
     const flow = sink.finite
       ? Math.min(agent.carry / cycle, supplyLeft.get(supply.id)!)
       : flowOf(agent, supply, sink, cycle);
     return flow >= (minReturn * agent.cost) / CREEP_LIFE_TIME;
   };
+  const clusterCovered = (sink: Sink) =>
+    [...assignments.values()].some((a) => a.sink.finite && a.sink.pos.getRangeTo(sink.pos) <= CLUSTER_RANGE);
+  /**
+   * True if a sink could use another creep. A finite job with no creep still needs one however
+   * small its rate: a wall is 1 energy over the whole horizon, but it doesn't build itself.
+   */
+  const wantsMore = (sink: Sink) =>
+    demandLeft.get(sink.key)! > EPSILON || (sink.finite && ![...assignments.values()].some((a) => a.sink === sink));
   const fitsPath = (t: Timing) =>
     [...t.tiles].every(([k, load]) => (tileLoad.get(k) ?? 0) + load <= bookable(network.lanes(Math.floor(k / 50), k % 50)) + EPSILON);
   const feasible = (agent: Agent, supply: Supply, sink: Sink, t: Timing) =>
@@ -217,7 +232,7 @@ function plan(agents: Agent[], network: Network): Map<string, Assignment> {
       const sample = pool[0];
       let best: { supply: Supply; sink: Sink; cost: number } | undefined;
       for (const sink of tier) {
-        if (demandLeft.get(sink.key)! <= EPSILON) continue;
+        if (!wantsMore(sink)) continue;
         for (const supply of network.supplies) {
           if (failed.has(`${supply.id}>${sink.key}`) || supplyLeft.get(supply.id)! <= EPSILON) continue;
           const t = timingOf(sample, supply, sink);
@@ -230,7 +245,9 @@ function plan(agents: Agent[], network: Network): Map<string, Assignment> {
       if (!best) break;
 
       const { supply, sink } = best;
-      const range = (a: Agent) => a.pos?.getRangeTo(supply.pos) ?? 0;
+      // The free agent closest to where it would start: the sink if it's already loaded (e.g. one
+      // that just finished the wall next door), the supply if it's empty.
+      const range = (a: Agent) => a.pos?.getRangeTo(a.loaded ? sink.pos : supply.pos) ?? 0;
       const agent = pool.find((a) => onRoute(a, supply, sink)) ?? pool.reduce((a, b) => (range(b) < range(a) ? b : a));
       if (allocate(agent, supply, sink)) pool.splice(pool.indexOf(agent), 1);
       else failed.add(`${supply.id}>${sink.key}`);
@@ -250,6 +267,7 @@ function agentOf(creep: Creep): Agent {
     carry: creep.store.getCapacity(RESOURCE_ENERGY),
     cost: bodyCost(creep.body.map((p) => p.type)),
     pos: creep.pos,
+    loaded: creep.memory.working && creep.store[RESOURCE_ENERGY] > 0,
     route: creep.memory.route,
   };
 }

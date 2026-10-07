@@ -4,7 +4,7 @@ import { sitePriority } from "../utils/construction";
 import { sourceIncome } from "../utils/mining";
 import { cachedTravelCost } from "../utils/paths";
 import { needsRepair } from "../utils/repair";
-import { isSafe, safeSources } from "../utils/safety";
+import { isSafe, isSafeSoon, safeSources } from "../utils/safety";
 import { controllerContainer, harvestSpots } from "../utils/sources";
 import { isWall } from "../utils/terrain";
 import { laneWidth } from "./lanes";
@@ -153,7 +153,8 @@ function sinks(room: Room, creeps: Creep[], hauled: number): Sink[] {
     }
   }
 
-  for (const site of room.find(FIND_MY_CONSTRUCTION_SITES, { filter: (s) => isSafe(s.pos) })) {
+  // Sites behind a keeper that's about to die count already, so a creep is there when it does.
+  for (const site of room.find(FIND_MY_CONSTRUCTION_SITES, { filter: (s) => isSafeSoon(s.pos) })) {
     result.push({
       key: `build:${site.id}`,
       kind: "build",

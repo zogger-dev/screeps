@@ -1,7 +1,7 @@
 import { deliverEnergy, findLooseEnergy, takeEnergy, updateWorking } from "../utils/energy";
 import { feederComing } from "../logistics/feeding";
-import { holdFor, mayApproach, park } from "../logistics/traffic";
-import { moveSafely } from "../utils/safety";
+import { holdFor, mayApproach, park, stageNear } from "../logistics/traffic";
+import { isSafe, moveSafely } from "../utils/safety";
 import type { RoleDef } from "./index";
 
 /** Decaying energy within this range is worth a short detour while loading. */
@@ -60,7 +60,9 @@ function spend(creep: Creep, route: Route | undefined): void {
       break;
     case "build":
       if (target instanceof ConstructionSite) {
-        if (creep.build(target) === ERR_NOT_IN_RANGE) {
+        // Planned ahead of a keeper's death: wait nearby, loaded, until it's gone.
+        if (!isSafe(target.pos)) stageNear(creep, target.pos);
+        else if (creep.build(target) === ERR_NOT_IN_RANGE) {
           moveSafely(creep, target, { range: 3, visualizePathStyle: { stroke: "#ffffff" } });
         }
         return;

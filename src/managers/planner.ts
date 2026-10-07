@@ -1,4 +1,4 @@
-import { isContested, keeperLairs, lairWallSpots } from "../utils/lairs";
+import { isContested, isLairWallSpot, keeperLairs, lairWallSpots } from "../utils/lairs";
 import { avoidThreats, isSafe, safeSources } from "../utils/safety";
 import { sourceContainer } from "../utils/sources";
 import { isWall } from "../utils/terrain";
@@ -44,7 +44,9 @@ interface PlanContext {
 
 const key = (x: number, y: number) => x * 50 + y;
 const isRoad = (s: ConstructionSite) => s.structureType === STRUCTURE_ROAD;
-const isNotRoad = (s: ConstructionSite) => !isRoad(s);
+/** Sites that count against MAX_PENDING_SITES: not roads, and not lair walls (placed all at once). */
+const isBudgeted = (s: ConstructionSite) =>
+  !isRoad(s) && !(s.structureType === STRUCTURE_WALL && isLairWallSpot(s.pos));
 
 const isObstacle = (type: string) => (OBSTACLE_OBJECT_TYPES as readonly string[]).includes(type);
 
@@ -106,7 +108,7 @@ function createContext(room: Room, anchor: RoomPosition): PlanContext {
     occupied,
     reserved,
     reachable: reachableFrom(room, anchor, terrain),
-    budget: MAX_PENDING_SITES - room.find(FIND_MY_CONSTRUCTION_SITES, { filter: isNotRoad }).length,
+    budget: MAX_PENDING_SITES - room.find(FIND_MY_CONSTRUCTION_SITES, { filter: isBudgeted }).length,
     roadBudget: MAX_PENDING_ROADS - room.find(FIND_MY_CONSTRUCTION_SITES, { filter: isRoad }).length,
   };
 }
@@ -221,8 +223,11 @@ function planLairWalls(ctx: PlanContext): void {
   if (allowance(ctx, STRUCTURE_WALL) <= 0) return;
   for (const lair of keeperLairs(ctx.room)) {
     for (const pos of lairWallSpots(lair)) {
-      if (ctx.budget <= 0) return;
-      if (!ctx.occupied.has(key(pos.x, pos.y))) place(ctx, pos.x, pos.y, STRUCTURE_WALL);
+      // The whole ring at once, outside the pending-site budget: walls cost 1 energy each and can
+      // only be built in the window between keepers, so they should all be ready when it opens.
+      if (!ctx.occupied.has(key(pos.x, pos.y)) && ctx.room.createConstructionSite(pos.x, pos.y, STRUCTURE_WALL) === OK) {
+        ctx.occupied.add(key(pos.x, pos.y));
+      }
     }
   }
 }

@@ -12,9 +12,12 @@ export const miner: RoleDef = {
     if (!source) return;
 
     const container = sourceContainer(source);
-    if (container && !creep.pos.isEqualTo(container.pos)) {
+    // The container tile can be taken, e.g. by the miner this one is replacing: mine from any
+    // tile next to the source until it's free.
+    const taken = container?.pos.lookFor(LOOK_CREEPS).some((c) => c !== creep);
+    if (container && !taken && !creep.pos.isEqualTo(container.pos)) {
       moveSafely(creep, container, { range: 0, visualizePathStyle: { stroke: "#ffaa00" } });
-    } else if (!container && !creep.pos.isNearTo(source)) {
+    } else if (!creep.pos.isNearTo(source)) {
       moveSafely(creep, source, { visualizePathStyle: { stroke: "#ffaa00" } });
     }
     // Harvest whenever in range, even while still stepping onto the container.

@@ -1,6 +1,8 @@
 import { bestTier, isOutdated, tierBody } from "../bodies";
 import { homeCreeps } from "../utils/census";
 import { haulersNeeded, isStaticSource, sourceIncome } from "../utils/mining";
+import { walkTicks } from "../utils/movement";
+import { cachedLeg } from "../utils/paths";
 import { safeSources } from "../utils/safety";
 import { setting } from "../utils/settings";
 import { controllerContainer } from "../utils/sources";
@@ -76,12 +78,46 @@ function plan(room: Room): Step[] {
 const matches = (creep: Creep, step: Step) =>
   creep.memory.type === step.type && (step.post === undefined || creep.memory.post === step.post);
 
+/** Types that hold a post nobody else covers, so a gap between one dying and the next arriving costs output. */
+const PRESPAWNED: CreepType[] = ["miner", "hauler", "worker"];
+/** Extra lead time for the spawn being busy with something else when the replacement is due. */
+const PRESPAWN_MARGIN = 20;
+
+/** Where a creep of a pre-spawned type works: its source, or the controller container for workers. */
+function workplace(creep: Creep): RoomPosition | undefined {
+  if (creep.memory.type === "worker") return creep.room.controller && controllerContainer(creep.room)?.pos;
+  const source = creep.memory.post && Game.getObjectById(creep.memory.post);
+  return source ? source.pos : undefined;
+}
+
+/**
+ * How long before a creep dies its replacement should start spawning, so the replacement is at
+ * its post before the old one is gone: the spawn time (3 ticks per part), the walk from the spawn
+ * to the post at the creep's own speed, and PRESPAWN_MARGIN.
+ */
+function leadTime(creep: Creep, spawn: StructureSpawn | undefined): number {
+  const spawnTime = creep.body.length * CREEP_SPAWN_TIME;
+  const post = workplace(creep);
+  const walk = spawn && post ? walkTicks(creep, cachedLeg(spawn.pos, post, 1), false) : 0;
+  return spawnTime + (isFinite(walk) ? walk : 0) + PRESPAWN_MARGIN;
+}
+
+/** True if a pre-spawned creep is close enough to death that its replacement is due. */
+function expiring(creep: Creep, spawn: StructureSpawn | undefined): boolean {
+  if (!PRESPAWNED.includes(creep.memory.type) || creep.ticksToLive === undefined) return false;
+  return creep.ticksToLive <= leadTime(creep, spawn);
+}
+
 /**
  * Creeps that count towards a step. Outdated creeps don't, so the spawner builds bigger
- * replacements while the old ones keep working.
+ * replacements while the old ones keep working. Nor do expiring ones, so their replacements are
+ * at the post before they die.
  */
 function current(room: Room, creeps: Creep[], step: Step): Creep[] {
-  return creeps.filter((c) => matches(c, step) && !c.memory.retiring && !isOutdated(c, room));
+  const spawn = room.find(FIND_MY_SPAWNS)[0];
+  return creeps.filter(
+    (c) => matches(c, step) && !c.memory.retiring && !isOutdated(c, room) && !expiring(c, spawn),
+  );
 }
 
 /**

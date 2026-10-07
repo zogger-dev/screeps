@@ -1,4 +1,4 @@
-import { moveSafely } from "../utils/safety";
+import { isSafe, moveSafely } from "../utils/safety";
 import { harvestSpots } from "../utils/sources";
 import { CHOKE_LANES, isChoke, laneWidth } from "./lanes";
 
@@ -79,6 +79,31 @@ export function holdFor(creep: Creep, target: RoomObject, hold: { x: number; y: 
   if (creep.pos.getRangeTo(target) < pos.getRangeTo(target)) return false;
   if (!creep.pos.inRangeTo(pos, 1)) moveSafely(creep, pos, { range: 1 });
   return true;
+}
+
+/** Furthest a staging creep looks for a safe tile near its target. */
+const MAX_STAGING_RANGE = 10;
+
+/**
+ * Waits for `target` to become safe (a keeper about to die of old age), loaded and as close as
+ * safely possible: on the nearest safe, walkable tile, so it can start the moment the keeper's gone.
+ */
+export function stageNear(creep: Creep, target: RoomPosition): void {
+  for (let r = 1; r <= MAX_STAGING_RANGE; r++) {
+    let best: RoomPosition | null = null;
+    for (let x = target.x - r; x <= target.x + r; x++) {
+      for (let y = target.y - r; y <= target.y + r; y++) {
+        if (Math.max(Math.abs(x - target.x), Math.abs(y - target.y)) !== r) continue;
+        if (x < 1 || x > 48 || y < 1 || y > 48 || laneWidth(target.roomName, x, y) === 0) continue;
+        const pos = new RoomPosition(x, y, target.roomName);
+        if (isSafe(pos) && (!best || creep.pos.getRangeTo(pos) < creep.pos.getRangeTo(best))) best = pos;
+      }
+    }
+    if (best) {
+      if (!creep.pos.isEqualTo(best)) moveSafely(creep, best, { range: 0 });
+      return;
+    }
+  }
 }
 
 /** Nearest tile to `near` that isn't a choke, searching ring by ring out to MAX_PARK_RADIUS. */

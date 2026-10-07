@@ -52,7 +52,16 @@ through it together.
   creep, and slow small-CARRY drones stay off long hauls, which miners and haulers do better.
   Finite jobs (construction, repairs) are judged on the flow the creep can carry rather than the
   job's remaining demand: the creep works it at full speed and is reassigned when it's done, so a
-  site near completion still gets finished.
+  site near completion still gets finished. And a cluster of finite jobs (sites within 3 tiles of
+  each other) that no creep covers yet gets its first creep regardless of distance: the sites were
+  placed to be built, and some (keeper lair walls, 1 energy each) are worth far more than the
+  energy they take.
+- Keepers die of old age like any creep (1500 ticks), and their lair takes 300 ticks to respawn
+  one, so the safe window around an unwalled lair is predictable from the keeper's `ticksToLive`.
+  Construction sites whose only threat is a keeper dying within 100 ticks are planned already;
+  their creep waits, loaded, at the nearest safe tile and builds the moment the keeper is gone.
+- A build or repair route whose target is no longer safe (or safe soon) is invalid, so its creep
+  is re-planned away immediately (e.g. off a keeper lair's walls when the keeper is due back).
 
 The best plan meets demand in priority order at the lowest total creep-time. Special cases fall
 out of it: a container site next to a Source is a near-zero-travel route, so that Source's energy
