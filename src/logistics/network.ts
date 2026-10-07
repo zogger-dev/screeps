@@ -4,8 +4,8 @@ import { sitePriority } from "../utils/construction";
 import { sourceIncome } from "../utils/mining";
 import { cachedTravelCost } from "../utils/paths";
 import { needsRepair } from "../utils/repair";
-import { isSafe, isSafeSoon, safeSources } from "../utils/safety";
-import { controllerContainer, harvestSpots } from "../utils/sources";
+import { isSafe, isSafeSoon, safeHarvestSpots, safeSources } from "../utils/safety";
+import { controllerContainer } from "../utils/sources";
 import { isWall } from "../utils/terrain";
 import { laneWidth } from "./lanes";
 
@@ -103,7 +103,7 @@ function supplies(room: Room, creeps: Creep[], hauled: Map<Id<Source>, number>):
   const mined = new Set(creeps.filter((c) => c.memory.type === "miner").map((c) => c.memory.post));
   for (const s of safeSources(room)) {
     if (mined.has(s.id)) continue;
-    result.push({ id: s.id, kind: "source", pos: s.pos, rate: sourceIncome(s), spots: harvestSpots(s) });
+    result.push({ id: s.id, kind: "source", pos: s.pos, rate: sourceIncome(s), spots: safeHarvestSpots(s).length });
   }
 
   // The controller container belongs to the workers once they're upgrading from it.

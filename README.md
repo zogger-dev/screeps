@@ -55,7 +55,7 @@ src/
     repair.ts        which structures are worth repairing
     safety.ts        danger zones around hostiles and keeper lairs, safe movement
     settings.ts      tuning knobs overridable from the console
-    sources.ts       harvest spots, source and controller containers
+    sources.ts       source and controller containers
     terrain.ts       wall test (terrain is a bitmask)
 ```
 
@@ -112,7 +112,8 @@ From RCL 2 the planner walls every open tile around each lair; builders put thos
 (priority -1, 1 energy each) during the window after the tower kills a keeper. The next keeper
 spawns trapped, and from then on only tiles within 3 of the lair (its ranged attack) are unsafe,
 which can free up the guarded source. Until the lair is enclosed, nothing else is planned or routed near it or its source (and stray
-sites there are removed). Towers stop shooting trapped keepers. Only possible in rooms
+sites there are removed). Once enclosed, a guarded source is worked from whichever harvest spots are
+out of the trapped keeper's reach. Towers stop shooting trapped keepers. Only possible in rooms
 we own; real Source Keeper rooms can't be claimed.
 
 ### Build priorities

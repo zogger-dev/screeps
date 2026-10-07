@@ -1,5 +1,4 @@
-import { isSafe, moveSafely } from "../utils/safety";
-import { harvestSpots } from "../utils/sources";
+import { isSafe, moveSafely, safeHarvestSpots } from "../utils/safety";
 import { CHOKE_LANES, isChoke, laneWidth } from "./lanes";
 
 /** A drone may set off for a busy source if a spot frees up within this many ticks of its arrival. */
@@ -40,7 +39,7 @@ function cleared(source: Source): Set<string> {
   if (granted) return granted;
 
   granted = new Set<string>();
-  const free = new Array<number>(harvestSpots(source)).fill(0);
+  const free = new Array<number>(safeHarvestSpots(source).length).fill(0);
   const near = source.pos.findInRange(FIND_CREEPS, 1);
   near.forEach((c, i) => {
     if (i >= free.length) return;
@@ -106,14 +105,15 @@ export function stageNear(creep: Creep, target: RoomPosition): void {
   }
 }
 
-/** Nearest tile to `near` that isn't a choke, searching ring by ring out to MAX_PARK_RADIUS. */
+/** Nearest safe tile to `near` that isn't a choke, searching ring by ring out to MAX_PARK_RADIUS. */
 function parkingTile(near: RoomPosition): RoomPosition | null {
   for (let r = 1; r <= MAX_PARK_RADIUS; r++) {
     for (let x = near.x - r; x <= near.x + r; x++) {
       for (let y = near.y - r; y <= near.y + r; y++) {
         if (Math.max(Math.abs(x - near.x), Math.abs(y - near.y)) !== r) continue;
         if (x < 1 || x > 48 || y < 1 || y > 48 || laneWidth(near.roomName, x, y) <= CHOKE_LANES) continue;
-        return new RoomPosition(x, y, near.roomName);
+        const pos = new RoomPosition(x, y, near.roomName);
+        if (isSafe(pos)) return pos;
       }
     }
   }

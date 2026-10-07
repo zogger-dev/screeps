@@ -86,12 +86,31 @@ export function isSafeSoon(pos: RoomPosition, horizon = STAGING_HORIZON): boolea
 }
 
 /**
- * Sources creeps can work: safe with one tile of margin, since harvesters stand next to the
- * source. A source guarded by a lair that isn't walled in yet doesn't count even between keeper
- * lives: nothing gets planned or routed there until the danger is contained.
+ * Harvest spots around a source that no threat reaches: where creeps can actually work it. A
+ * source inside a trapped keeper's reach can still have safe spots on its far side.
+ */
+export function safeHarvestSpots(source: Source): RoomPosition[] {
+  const terrain = source.room.getTerrain();
+  const spots: RoomPosition[] = [];
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      const x = source.pos.x + dx;
+      const y = source.pos.y + dy;
+      if ((!dx && !dy) || isWall(terrain, x, y)) continue;
+      const pos = new RoomPosition(x, y, source.room.name);
+      if (isSafe(pos)) spots.push(pos);
+    }
+  }
+  return spots;
+}
+
+/**
+ * Sources creeps can work: at least one safe harvest spot. A source guarded by a lair that isn't
+ * walled in yet doesn't count even between keeper lives: nothing gets planned or routed there
+ * until the danger is contained.
  */
 export function safeSources(room: Room): Source[] {
-  return room.find(FIND_SOURCES).filter((s) => isSafe(s.pos, 1) && !isGuardedByOpenLair(s));
+  return room.find(FIND_SOURCES).filter((s) => !isGuardedByOpenLair(s) && safeHarvestSpots(s).length > 0);
 }
 
 /** Adds danger-zone costs to a cost matrix. Usable as a moveTo costCallback. */
