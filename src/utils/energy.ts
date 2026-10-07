@@ -39,7 +39,8 @@ export function deliverEnergy(creep: Creep, stockpile = true): boolean {
   return true;
 }
 
-function stockpileTarget(creep: Creep): StructureContainer | StructureStorage | null {
+/** Closest container or storage with room that isn't a source container: where surplus is stocked. */
+export function stockpileTarget(creep: Creep): StructureContainer | StructureStorage | null {
   return creep.pos.findClosestByPath(FIND_STRUCTURES, {
     filter: (s): s is StructureContainer | StructureStorage =>
       (s.structureType === STRUCTURE_CONTAINER || s.structureType === STRUCTURE_STORAGE) &&

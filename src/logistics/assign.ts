@@ -1,7 +1,8 @@
 import { bodyCost } from "../bodies";
-import { cachedTravelCost } from "../utils/paths";
+import { cachedLeg, type Leg } from "../utils/paths";
 import { needsRepair } from "../utils/repair";
 import { setting } from "../utils/settings";
+import { CHOKE_LANES } from "./lanes";
 import type { Network, Sink, Supply } from "./network";
 
 /** Flows below this many energy per tick count as satisfied. */
@@ -16,6 +17,11 @@ const STICKINESS = 0.8;
 interface Agent {
   name: string;
   work: number;
+  carryParts: number;
+  move: number;
+  /** Parts other than WORK, CARRY and MOVE: they add fatigue too. */
+  other: number;
+  /** Energy it carries when full. */
   carry: number;
   /** Body cost; spread over the creep's life, it's what a route has to earn back. */
   cost: number;
@@ -27,56 +33,61 @@ export interface Assignment {
   supply: Supply;
   sink: Sink;
   flow: number;
+  hold?: { x: number; y: number };
+}
+
+/** What a route costs an agent per cycle, and what it takes from the loading spot and the path. */
+interface Timing {
+  cycle: number;
+  /** Fraction of the cycle the agent holds a loading spot. */
+  occupancy: number;
+  /** Fraction of the cycle the agent occupies each path tile, keyed by x * 50 + y. */
+  tiles: Map<number, number>;
 }
 
 /**
- * Ticks for a whole load-spend-return cycle, and the fraction of it the agent holds a loading
- * spot. Normally that's just while loading; but if the sink is in reach of the spot (no travel),
+ * Ticks to cross a tile: each non-MOVE part adds 2 x factor fatigue per step (CARRY only when
+ * loaded) and each MOVE part removes 2 per tick.
+ */
+function ticksPerTile(weight: number, move: number, factor: number): number {
+  if (weight === 0) return 1;
+  if (move === 0) return Infinity;
+  return Math.max(1, Math.ceil((weight * factor) / move));
+}
+
+/**
+ * Walks the route tile by tile: loaded out to the sink, empty back. The cycle is loading +
+ * walking + spending; each tile is occupied while crossing it both ways, and the last one while
+ * spending (the creep works from there). If the sink is in reach of the loading spot (no path),
  * the agent never leaves, so it holds the spot the whole time.
  */
-function timing(agent: Agent, supply: Supply, sink: Sink): { cycle: number; occupancy: number } {
+function timing(agent: Agent, supply: Supply, sink: Sink, leg: Leg): Timing {
+  if (!isFinite(leg.cost)) return { cycle: Infinity, occupancy: 1, tiles: new Map() };
   const work = Math.max(1, agent.work);
   const load = supply.kind === "source" ? Math.ceil(agent.carry / (work * HARVEST_POWER)) : 1;
   const spend = sink.workPerPart > 0 ? Math.ceil(agent.carry / (work * sink.workPerPart)) : 1;
-  // Path cost uses plain = 2, which is about how many ticks a drone takes per plain tile.
-  const travel = cachedTravelCost(supply.pos, sink.pos, sink.range);
-  const cycle = load + 2 * travel + spend;
-  const occupancy = supply.kind !== "source" ? 0 : travel === 0 ? 1 : load / cycle;
-  return { cycle, occupancy };
+
+  const loaded = agent.work + agent.carryParts + agent.other;
+  const empty = agent.work + agent.other;
+  const crossings = leg.tiles.map((t) => ticksPerTile(loaded, agent.move, t.factor) + ticksPerTile(empty, agent.move, t.factor));
+  const cycle = load + crossings.reduce((a, b) => a + b, 0) + spend;
+
+  const tiles = new Map<number, number>();
+  leg.tiles.forEach((t, i) => {
+    const dwell = crossings[i] + (i === leg.tiles.length - 1 ? spend : 0);
+    tiles.set(t.x * 50 + t.y, (tiles.get(t.x * 50 + t.y) ?? 0) + dwell / cycle);
+  });
+  return { cycle, occupancy: leg.tiles.length === 0 ? 1 : load / cycle, tiles };
 }
 
 /**
- * How much of a source's spot-time the plan may book for creeps that come and go. They arrive in
- * bunches rather than taking perfect turns, and a single spot suffers most: any overlap is a
- * queue. With more spots, bunches even out. Square-root staffing captures this: book
- * c - k * sqrt(c) of c spots, where k = 1 - spotUtilization (the utilization for a single spot).
+ * Where an agent should wait for a supply behind a choke: the first wide tile on the way back
+ * from it. None if the supply's surroundings are already wide, or there's no wide tile at all.
  */
-function bookableSpots(spots: number): number {
-  return Math.max(0, spots - (1 - setting("spotUtilization")) * Math.sqrt(spots));
-}
-
-/**
- * A source's loading spots. Creeps that never leave (their sink is in reach) each take a whole
- * spot, and can't bunch; creeps that come and go share the rest, with slack for bunching.
- */
-interface Spots {
-  total: number;
-  stationed: number;
-  rotating: number;
-}
-
-function fits(spots: Spots | undefined, occupancy: number): boolean {
-  if (!spots) return true; // stores load in a tick, so they're never the bottleneck
-  if (occupancy >= 1) {
-    return spots.stationed + 1 <= spots.total && spots.rotating <= bookableSpots(spots.total - spots.stationed - 1) + EPSILON;
-  }
-  return spots.rotating + occupancy <= bookableSpots(spots.total - spots.stationed) + EPSILON;
-}
-
-function book(spots: Spots | undefined, occupancy: number): void {
-  if (!spots) return;
-  if (occupancy >= 1) spots.stationed++;
-  else spots.rotating += occupancy;
+function holdPoint(leg: Leg, lanes: Network["lanes"]): { x: number; y: number } | undefined {
+  if (leg.tiles.length === 0 || lanes(leg.tiles[0].x, leg.tiles[0].y) > CHOKE_LANES) return undefined;
+  const wide = leg.tiles.find((t) => lanes(t.x, t.y) > CHOKE_LANES);
+  return wide && { x: wide.x, y: wide.y };
 }
 
 const onRoute = (agent: Agent, supply: Supply, sink: Sink): boolean => {
@@ -94,39 +105,105 @@ export function isRouteValid(route: Route | undefined): boolean {
 }
 
 /**
+ * How much of c servers' time the plan may book. Creeps arrive in bunches rather than taking
+ * perfect turns, and a single server (a loading spot, or a lane through a choke) suffers most:
+ * any overlap is a queue. With more, bunches even out. Square-root staffing captures this: book
+ * c - k * sqrt(c), where k = 1 - spotUtilization (the utilization for a single server).
+ */
+function bookable(servers: number): number {
+  return Math.max(0, servers - (1 - setting("spotUtilization")) * Math.sqrt(servers));
+}
+
+/**
+ * A supply's loading spots. Creeps that never leave (their sink is in reach) each take a whole
+ * spot, and can't bunch; creeps that come and go share the rest, with slack for bunching.
+ */
+interface Spots {
+  total: number;
+  stationed: number;
+  rotating: number;
+}
+
+function fitsSpots(spots: Spots, occupancy: number): boolean {
+  if (occupancy >= 1) {
+    return spots.stationed + 1 <= spots.total && spots.rotating <= bookable(spots.total - spots.stationed - 1) + EPSILON;
+  }
+  return spots.rotating + occupancy <= bookable(spots.total - spots.stationed) + EPSILON;
+}
+
+function bookSpots(spots: Spots, occupancy: number): void {
+  if (occupancy >= 1) spots.stationed++;
+  else spots.rotating += occupancy;
+}
+
+/**
  * Greedy flow assignment, planned from scratch each time. Sinks are served in priority order;
  * within a priority level it repeatedly takes the cheapest (supply, sink) pair (fewest agent-ticks
- * per unit of energy) whose supply still has energy and loading spots, so agents spread across
- * equal-priority sinks and nobody crosses the map while a nearby site goes without. Routes some
- * agent is already on get a STICKINESS discount and are carried by that agent, so routes stay
- * stable between plans; other pairs go to the free agent nearest the supply.
+ * per unit of energy), so agents spread across equal-priority sinks and nobody crosses the map
+ * while a nearby site goes without. Routes some agent is already on get a STICKINESS discount and
+ * are carried by that agent, so routes stay stable between plans; other pairs go to the free agent
+ * nearest the supply.
  *
- * Spots are booked through fits/book, leaving slack for creeps arriving in bunches. A route only
- * gets an agent if it delivers at least minRouteReturn times the agent's upkeep (body cost spread
- * over its life); long hauls on a small body aren't worth the creep, or the traffic.
+ * Capacity: loading spots and every tile along a route are booked with slack for bunching
+ * (`bookable`), a tile having as many servers as it has lanes. So a choke caps the traffic of all
+ * routes through it together, whichever supplies and sinks they join. An agent is only assigned if
+ * the flow it would actually carry (capped by what's left of the supply and the sink's demand) is
+ * at least minRouteReturn times its upkeep: long hauls on a small body, or crumbs of leftover
+ * supply or demand, aren't worth a creep or the traffic it adds.
  */
 function plan(agents: Agent[], network: Network): Map<string, Assignment> {
   const sinks = [...network.sinks].sort((a, b) => a.priority - b.priority);
   const minReturn = setting("minRouteReturn");
   const supplyLeft = new Map(network.supplies.map((s) => [s.id as string, s.rate]));
-  const spots = new Map<string, Spots>();
-  for (const s of network.supplies) {
-    if (s.kind === "source") spots.set(s.id, { total: s.spots, stationed: 0, rotating: 0 });
-  }
-  const worthIt = (agent: Agent, cycle: number) =>
-    agent.carry / cycle >= (minReturn * agent.cost) / CREEP_LIFE_TIME;
+  const spots = new Map(network.supplies.map((s) => [s.id as string, { total: s.spots, stationed: 0, rotating: 0 }]));
   const demandLeft = new Map(sinks.map((k) => [k.key, k.demand]));
+  const tileLoad = new Map<number, number>();
   const assignments = new Map<string, Assignment>();
 
+  const legOf = (supply: Supply, sink: Sink) => cachedLeg(supply.pos, sink.pos, sink.range);
+  const timings = new Map<string, Timing>();
+  const timingOf = (agent: Agent, supply: Supply, sink: Sink): Timing => {
+    const key = `${supply.id}>${sink.key}|${agent.work},${agent.carryParts},${agent.move},${agent.other}`;
+    let t = timings.get(key);
+    if (!t) {
+      t = timing(agent, supply, sink, legOf(supply, sink));
+      timings.set(key, t);
+    }
+    return t;
+  };
+
+  /** What the agent would actually carry on supply -> sink, given what's left of both. */
+  const flowOf = (agent: Agent, supply: Supply, sink: Sink, cycle: number) =>
+    Math.min(agent.carry / cycle, supplyLeft.get(supply.id)!, demandLeft.get(sink.key)!);
+  /**
+   * Whether the route earns its creep. For a continuous sink (refill, upgrading) a sliver of
+   * leftover demand doesn't justify a whole creep. A finite job (building, repairing) is different:
+   * the creep works it at full speed until it's done and is then reassigned, so it's judged on the
+   * flow it can carry, or a site near completion would never get finished.
+   */
+  const worthIt = (agent: Agent, supply: Supply, sink: Sink, cycle: number) => {
+    const flow = sink.finite
+      ? Math.min(agent.carry / cycle, supplyLeft.get(supply.id)!)
+      : flowOf(agent, supply, sink, cycle);
+    return flow >= (minReturn * agent.cost) / CREEP_LIFE_TIME;
+  };
+  const fitsPath = (t: Timing) =>
+    [...t.tiles].every(([k, load]) => (tileLoad.get(k) ?? 0) + load <= bookable(network.lanes(Math.floor(k / 50), k % 50)) + EPSILON);
+  const feasible = (agent: Agent, supply: Supply, sink: Sink, t: Timing) =>
+    isFinite(t.cycle) &&
+    fitsSpots(spots.get(supply.id)!, t.occupancy) &&
+    worthIt(agent, supply, sink, t.cycle) &&
+    fitsPath(t);
+
   const allocate = (agent: Agent, supply: Supply, sink: Sink): boolean => {
-    const { cycle, occupancy } = timing(agent, supply, sink);
-    if (!isFinite(cycle) || !worthIt(agent, cycle) || !fits(spots.get(supply.id), occupancy)) return false;
-    const flow = Math.min(agent.carry / cycle, supplyLeft.get(supply.id)!, demandLeft.get(sink.key)!);
-    if (flow <= EPSILON) return false;
+    const t = timingOf(agent, supply, sink);
+    if (!feasible(agent, supply, sink, t)) return false;
+    const flow = flowOf(agent, supply, sink, t.cycle);
     supplyLeft.set(supply.id, supplyLeft.get(supply.id)! - flow);
-    book(spots.get(supply.id), occupancy);
     demandLeft.set(sink.key, demandLeft.get(sink.key)! - flow);
-    assignments.set(agent.name, { supply, sink, flow });
+    bookSpots(spots.get(supply.id)!, t.occupancy);
+    for (const [k, load] of t.tiles) tileLoad.set(k, (tileLoad.get(k) ?? 0) + load);
+    assignments.set(agent.name, { supply, sink, flow, hold: holdPoint(legOf(supply, sink), network.lanes) });
     return true;
   };
 
@@ -136,18 +213,17 @@ function plan(agents: Agent[], network: Network): Map<string, Assignment> {
     const tier = sinks.filter((k) => k.priority === level);
     const failed = new Set<string>();
     while (pool.length > 0) {
-      // Cheapest pair in agent-ticks per energy, judged with one agent (bodies are similar).
+      // Cheapest feasible pair in agent-ticks per energy, judged with one agent (bodies are similar).
       const sample = pool[0];
       let best: { supply: Supply; sink: Sink; cost: number } | undefined;
       for (const sink of tier) {
         if (demandLeft.get(sink.key)! <= EPSILON) continue;
         for (const supply of network.supplies) {
-          if (failed.has(`${supply.id}>${sink.key}`)) continue;
-          if (supplyLeft.get(supply.id)! <= EPSILON) continue;
-          const { cycle, occupancy } = timing(sample, supply, sink);
-          if (!isFinite(cycle) || !worthIt(sample, cycle) || !fits(spots.get(supply.id), occupancy)) continue;
+          if (failed.has(`${supply.id}>${sink.key}`) || supplyLeft.get(supply.id)! <= EPSILON) continue;
+          const t = timingOf(sample, supply, sink);
+          if (!feasible(sample, supply, sink, t)) continue;
           const current = pool.some((a) => onRoute(a, supply, sink));
-          const cost = (cycle / sample.carry) * (current ? STICKINESS : 1);
+          const cost = (t.cycle / sample.carry) * (current ? STICKINESS : 1);
           if (!best || cost < best.cost) best = { supply, sink, cost };
         }
       }
@@ -163,14 +239,20 @@ function plan(agents: Agent[], network: Network): Map<string, Assignment> {
   return assignments;
 }
 
-const agentOf = (creep: Creep): Agent => ({
-  name: creep.name,
-  work: creep.getActiveBodyparts(WORK),
-  carry: creep.store.getCapacity(RESOURCE_ENERGY),
-  cost: bodyCost(creep.body.map((p) => p.type)),
-  pos: creep.pos,
-  route: creep.memory.route,
-});
+function agentOf(creep: Creep): Agent {
+  const count = (part: BodyPartConstant) => creep.getActiveBodyparts(part);
+  return {
+    name: creep.name,
+    work: count(WORK),
+    carryParts: count(CARRY),
+    move: count(MOVE),
+    other: creep.body.filter((p) => p.hits > 0 && p.type !== WORK && p.type !== CARRY && p.type !== MOVE).length,
+    carry: creep.store.getCapacity(RESOURCE_ENERGY),
+    cost: bodyCost(creep.body.map((p) => p.type)),
+    pos: creep.pos,
+    route: creep.memory.route,
+  };
+}
 
 /**
  * Plans routes for the room's drones and writes them to memory.route. Drones the plan has no use
@@ -180,7 +262,7 @@ export function assignRoutes(drones: Creep[], network: Network): Map<string, Ass
   const assignments = plan(drones.map(agentOf), network);
   for (const drone of drones) {
     const a = assignments.get(drone.name);
-    if (a) drone.memory.route = { from: a.supply.id, kind: a.sink.kind, target: a.sink.target };
+    if (a) drone.memory.route = { from: a.supply.id, kind: a.sink.kind, target: a.sink.target, hold: a.hold };
     else delete drone.memory.route;
   }
   return assignments;
@@ -191,9 +273,15 @@ export function assignRoutes(drones: Creep[], network: Network): Map<string, Ass
  * hypothetical drones and counts the ones that get a route.
  */
 export function dronesWanted(network: Network, body: BodyPartConstant[], max: number): number {
-  const work = body.filter((p) => p === WORK).length;
-  const carry = body.filter((p) => p === CARRY).length * CARRY_CAPACITY;
-  const cost = bodyCost(body);
-  const agents = Array.from({ length: max }, (_, i) => ({ name: `hypothetical-${i}`, work, carry, cost }));
+  const count = (part: BodyPartConstant) => body.filter((p) => p === part).length;
+  const agent = {
+    work: count(WORK),
+    carryParts: count(CARRY),
+    move: count(MOVE),
+    other: body.length - count(WORK) - count(CARRY) - count(MOVE),
+    carry: count(CARRY) * CARRY_CAPACITY,
+    cost: bodyCost(body),
+  };
+  const agents = Array.from({ length: max }, (_, i) => ({ ...agent, name: `hypothetical-${i}` }));
   return plan(agents, network).size;
 }

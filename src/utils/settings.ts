@@ -2,7 +2,7 @@ const DEFAULTS: Settings = {
   minDrones: 2,
   maxDrones: 20,
   spotUtilization: 0.5,
-  minRouteReturn: 2,
+  minRouteReturn: 3,
   showRoutes: false,
   upgradeShare: 0.6,
 };

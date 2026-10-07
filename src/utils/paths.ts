@@ -1,6 +1,6 @@
 import { avoidThreats } from "./safety";
 
-/** Source -> destination legs don't change often; recompute them this often to pick up new roads. */
+/** Legs between fixed points don't change often; recompute them this often to pick up new roads. */
 const LEG_CACHE_TICKS = 500;
 
 let matrixTick = -1;
@@ -40,20 +40,59 @@ export function travelCost(from: RoomPosition, to: RoomPosition, range = 1): num
   return result.incomplete ? Infinity : result.cost;
 }
 
-let legTick = -1;
-const legs = new Map<string, number>();
+/** A tile on a leg, with its fatigue factor: road 0.5, plain 1, swamp 5. */
+export interface LegTile {
+  x: number;
+  y: number;
+  factor: number;
+}
 
-/** travelCost between two fixed points (e.g. a source and the controller), cached for a while. */
-export function cachedTravelCost(from: RoomPosition, to: RoomPosition, range = 1): number {
+/** A cached path between two fixed points: its path cost and the tiles walked, in order. */
+export interface Leg {
+  cost: number;
+  tiles: LegTile[];
+}
+
+let legTick = -1;
+const legs = new Map<string, Leg>();
+
+/** Fatigue factor of each tile: roads halve fatigue, swamps multiply it by 5. */
+function tileFactors(roomName: string, path: RoomPosition[]): LegTile[] {
+  const room = Game.rooms[roomName];
+  const terrain = room?.getTerrain();
+  return path.map(({ x, y }) => {
+    const road = room?.lookForAt(LOOK_STRUCTURES, x, y).some((s) => s.structureType === STRUCTURE_ROAD);
+    const swamp = terrain !== undefined && (terrain.get(x, y) & TERRAIN_MASK_SWAMP) !== 0;
+    return { x, y, factor: road ? 0.5 : swamp ? 5 : 1 };
+  });
+}
+
+/**
+ * The path between two fixed points (e.g. a source and the controller), cached for a while so new
+ * roads get picked up. Walking from `from` to within `range` of `to`; `from` itself isn't included.
+ */
+export function cachedLeg(from: RoomPosition, to: RoomPosition, range = 1): Leg {
   if (Game.time - legTick >= LEG_CACHE_TICKS) {
     legs.clear();
     legTick = Game.time;
   }
   const key = `${from.roomName}:${from.x},${from.y}>${to.x},${to.y}:${range}`;
-  let cost = legs.get(key);
-  if (cost === undefined) {
-    cost = travelCost(from, to, range);
-    legs.set(key, cost);
+  let leg = legs.get(key);
+  if (!leg) {
+    const result = PathFinder.search(
+      from,
+      { pos: to, range },
+      { plainCost: 2, swampCost: 10, maxRooms: 1, roomCallback: roomCosts },
+    );
+    leg = result.incomplete
+      ? { cost: Infinity, tiles: [] }
+      : { cost: result.cost, tiles: tileFactors(from.roomName, result.path) };
+    legs.set(key, leg);
   }
-  return cost;
+  return leg;
+}
+
+/** travelCost between two fixed points, cached for a while. */
+export function cachedTravelCost(from: RoomPosition, to: RoomPosition, range = 1): number {
+  return cachedLeg(from, to, range).cost;
 }

@@ -1,4 +1,6 @@
 import { deliverEnergy, findLooseEnergy, takeEnergy, updateWorking } from "../utils/energy";
+import { feederComing } from "../logistics/feeding";
+import { holdFor, mayApproach, park } from "../logistics/traffic";
 import { moveSafely } from "../utils/safety";
 import type { RoleDef } from "./index";
 
@@ -17,9 +19,13 @@ function load(creep: Creep, route: Route | undefined): void {
   if (!from) {
     loadAnywhere(creep);
   } else if (from instanceof Source) {
-    if (creep.harvest(from) === ERR_NOT_IN_RANGE) {
-      moveSafely(creep, from, { visualizePathStyle: { stroke: "#ffaa00" } });
-    }
+    if (creep.pos.isNearTo(from)) creep.harvest(from);
+    // Behind a choke, only set off once a spot will be free on arrival; queue at the hold point.
+    else if (route.hold && !mayApproach(creep, from) && holdFor(creep, from, route.hold)) return;
+    else moveSafely(creep, from, { visualizePathStyle: { stroke: "#ffaa00" } });
+  } else if (from.store[RESOURCE_ENERGY] === 0) {
+    // Empty for now: wait out of the way until it refills.
+    if (!route.hold || !holdFor(creep, from, route.hold)) park(creep, from.pos);
   } else {
     takeEnergy(creep, from);
   }
@@ -41,9 +47,9 @@ function spend(creep: Creep, route: Route | undefined): void {
     case "fill": {
       // Drones don't stockpile; containers and storage are the haulers' job.
       if (deliverEnergy(creep, false)) return;
-      // Spawn's full for now; it'll need this load soon, so wait nearby rather than wander off.
+      // Spawn's full for now; it'll need this load soon, so wait nearby (outside any choke).
       const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
-      if (spawn && !creep.pos.inRangeTo(spawn, 3)) moveSafely(creep, spawn, { range: 3 });
+      if (spawn) park(creep, spawn.pos);
       return;
     }
     case "tower":
@@ -85,6 +91,7 @@ export const drone: RoleDef = {
   run(creep) {
     const route = creep.memory.route;
     if (updateWorking(creep)) spend(creep, route);
-    else load(creep, route);
+    // Run dry with a hauler on the way that'll arrive before a reload trip would: wait for it.
+    else if (!feederComing(creep)) load(creep, route);
   },
 };

@@ -6,6 +6,8 @@ import { cachedTravelCost } from "../utils/paths";
 import { needsRepair } from "../utils/repair";
 import { isSafe, safeSources } from "../utils/safety";
 import { controllerContainer, harvestSpots } from "../utils/sources";
+import { isWall } from "../utils/terrain";
+import { laneWidth } from "./lanes";
 
 /**
  * Ticks over which the spawn's refill shortfall is spread. Spawning drains it constantly, so the
@@ -36,7 +38,7 @@ export interface Supply {
   pos: RoomPosition;
   /** Energy per tick available to drones. */
   rate: number;
-  /** How many drones can load at once; stores load in a tick, so they're unlimited. */
+  /** Tiles drones can load from: harvest spots for a Source, walkable neighbours for a store. */
   spots: number;
 }
 
@@ -54,11 +56,15 @@ export interface Sink {
   priority: number;
   /** Energy per tick wanted; Infinity for the controller, which takes whatever is left. */
   demand: number;
+  /** A job that ends (a construction site, a repair), rather than an ongoing need. */
+  finite?: boolean;
 }
 
 export interface Network {
   supplies: Supply[];
   sinks: Sink[];
+  /** Lanes through a tile (see logistics/lanes.ts): how much traffic it can carry. */
+  lanes(x: number, y: number): number;
 }
 
 /** Energy per tick each source's haulers move to the base, from their CARRY and round trip. */
@@ -72,6 +78,24 @@ function haulerRates(creeps: Creep[], spawn: StructureSpawn | undefined): Map<Id
     rates.set(source.id, (rates.get(source.id) ?? 0) + hauler.store.getCapacity(RESOURCE_ENERGY) / trip);
   }
   return rates;
+}
+
+/** Walkable tiles next to a structure: how many creeps can reach it at once. */
+function accessTiles(structure: Structure): number {
+  const terrain = structure.room.getTerrain();
+  let tiles = 0;
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      const x = structure.pos.x + dx;
+      const y = structure.pos.y + dy;
+      if ((!dx && !dy) || x < 0 || x > 49 || y < 0 || y > 49 || isWall(terrain, x, y)) continue;
+      const blocked = structure.room
+        .lookForAt(LOOK_STRUCTURES, x, y)
+        .some((s) => (OBSTACLE_OBJECT_TYPES as readonly string[]).includes(s.structureType));
+      if (!blocked) tiles++;
+    }
+  }
+  return tiles;
 }
 
 function supplies(room: Room, creeps: Creep[], hauled: Map<Id<Source>, number>): Supply[] {
@@ -95,7 +119,7 @@ function supplies(room: Room, creeps: Creep[], hauled: Map<Id<Source>, number>):
     const source = store.pos.findInRange(FIND_SOURCES, 1)[0];
     const inflow = source && mined.has(source.id) ? Math.max(0, sourceIncome(source) - (hauled.get(source.id) ?? 0)) : 0;
     const rate = store.store[RESOURCE_ENERGY] / STORE_HORIZON + inflow;
-    if (rate > 0) result.push({ id: store.id, kind: "store", pos: store.pos, rate, spots: Infinity });
+    if (rate > 0) result.push({ id: store.id, kind: "store", pos: store.pos, rate, spots: accessTiles(store) });
   }
   return result;
 }
@@ -139,6 +163,7 @@ function sinks(room: Room, creeps: Creep[], hauled: number): Sink[] {
       workPerPart: BUILD_POWER,
       priority: PRIORITY.build + sitePriority(site),
       demand: (site.progressTotal - site.progress) / WORK_HORIZON,
+      finite: true,
     });
   }
 
@@ -156,6 +181,7 @@ function sinks(room: Room, creeps: Creep[], hauled: number): Sink[] {
       workPerPart: REPAIR_POWER * REPAIR_COST,
       priority: PRIORITY.repair,
       demand: ((s.hitsMax - s.hits) * REPAIR_COST) / WORK_HORIZON,
+      finite: true,
     });
   }
 
@@ -175,5 +201,9 @@ export function buildNetwork(room: Room): Network {
   const creeps = homeCreeps(room.name);
   const hauled = haulerRates(creeps, room.find(FIND_MY_SPAWNS)[0]);
   const totalHauled = [...hauled.values()].reduce((a, b) => a + b, 0);
-  return { supplies: supplies(room, creeps, hauled), sinks: sinks(room, creeps, totalHauled) };
+  return {
+    supplies: supplies(room, creeps, hauled),
+    sinks: sinks(room, creeps, totalHauled),
+    lanes: (x, y) => laneWidth(room.name, x, y),
+  };
 }

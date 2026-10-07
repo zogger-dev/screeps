@@ -1,6 +1,7 @@
-import { keeperLairs, lairWallSpots } from "../utils/lairs";
+import { isContested, keeperLairs, lairWallSpots } from "../utils/lairs";
 import { avoidThreats, isSafe, safeSources } from "../utils/safety";
 import { sourceContainer } from "../utils/sources";
+import { isWall } from "../utils/terrain";
 
 /** Placement is cheap, but there's no need to re-plan every tick. */
 const PLAN_INTERVAL = 25;
@@ -33,6 +34,8 @@ interface PlanContext {
   occupied: Set<number>;
   /** Tiles kept clear: next to sources/minerals (harvest spots) and the controller (upgrade spots). */
   reserved: Set<number>;
+  /** Walkable tiles creeps can reach from the anchor. */
+  reachable: Set<number>;
   /** How many more non-road sites we may place this run. */
   budget: number;
   /** How many more road sites we may place this run. */
@@ -42,6 +45,45 @@ interface PlanContext {
 const key = (x: number, y: number) => x * 50 + y;
 const isRoad = (s: ConstructionSite) => s.structureType === STRUCTURE_ROAD;
 const isNotRoad = (s: ConstructionSite) => !isRoad(s);
+
+const isObstacle = (type: string) => (OBSTACLE_OBJECT_TYPES as readonly string[]).includes(type);
+
+/**
+ * Flood fill from the anchor over walkable tiles: not natural walls, obstacle structures, or
+ * sites that will become obstacles. A structure is only useful where creeps can get next to it.
+ */
+function reachableFrom(room: Room, anchor: RoomPosition, terrain: RoomTerrain): Set<number> {
+  const blocked = new Set<number>();
+  for (const s of room.find(FIND_STRUCTURES)) if (isObstacle(s.structureType)) blocked.add(key(s.pos.x, s.pos.y));
+  for (const s of room.find(FIND_CONSTRUCTION_SITES)) if (isObstacle(s.structureType)) blocked.add(key(s.pos.x, s.pos.y));
+
+  const reachable = new Set<number>();
+  const queue: [number, number][] = [[anchor.x, anchor.y]];
+  while (queue.length > 0) {
+    const [cx, cy] = queue.pop()!;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const x = cx + dx;
+        const y = cy + dy;
+        const k = key(x, y);
+        if (x < 0 || x > 49 || y < 0 || y > 49 || reachable.has(k) || blocked.has(k) || isWall(terrain, x, y)) continue;
+        reachable.add(k);
+        queue.push([x, y]);
+      }
+    }
+  }
+  return reachable;
+}
+
+/** True if a creep can stand next to (x, y), i.e. a structure there could be built and used. */
+function touchesReachable(ctx: PlanContext, x: number, y: number): boolean {
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      if ((dx || dy) && ctx.reachable.has(key(x + dx, y + dy))) return true;
+    }
+  }
+  return false;
+}
 
 function createContext(room: Room, anchor: RoomPosition): PlanContext {
   const occupied = new Set<number>();
@@ -55,29 +97,36 @@ function createContext(room: Room, anchor: RoomPosition): PlanContext {
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) reserved.add(key(pos.x + dx, pos.y + dy));
   }
 
+  const terrain = room.getTerrain();
   return {
     room,
     rcl: room.controller?.level ?? 0,
     anchor,
-    terrain: room.getTerrain(),
+    terrain,
     occupied,
     reserved,
+    reachable: reachableFrom(room, anchor, terrain),
     budget: MAX_PENDING_SITES - room.find(FIND_MY_CONSTRUCTION_SITES, { filter: isNotRoad }).length,
     roadBudget: MAX_PENDING_ROADS - room.find(FIND_MY_CONSTRUCTION_SITES, { filter: isRoad }).length,
   };
 }
 
-/** Free, buildable tile away from room exits, harvest/upgrade spots and danger. */
+/**
+ * Free, buildable tile creeps can get next to, away from room exits, harvest/upgrade spots,
+ * danger and unwalled keepers.
+ */
 function isOpen(ctx: PlanContext, x: number, y: number): boolean {
   return (
     x >= 2 &&
     x <= 47 &&
     y >= 2 &&
     y <= 47 &&
-    ctx.terrain.get(x, y) !== TERRAIN_MASK_WALL &&
+    !isWall(ctx.terrain, x, y) &&
     !ctx.occupied.has(key(x, y)) &&
     !ctx.reserved.has(key(x, y)) &&
-    isSafe(new RoomPosition(x, y, ctx.room.name))
+    touchesReachable(ctx, x, y) &&
+    isSafe(new RoomPosition(x, y, ctx.room.name)) &&
+    !isContested(new RoomPosition(x, y, ctx.room.name))
   );
 }
 
@@ -149,7 +198,7 @@ function planSourceContainers(ctx: PlanContext): void {
         const x = source.pos.x + dx;
         const y = source.pos.y + dy;
         if (x < 1 || x > 48 || y < 1 || y > 48) continue;
-        if (ctx.terrain.get(x, y) === TERRAIN_MASK_WALL || ctx.occupied.has(key(x, y))) continue;
+        if (isWall(ctx.terrain, x, y) || ctx.occupied.has(key(x, y)) || !ctx.reachable.has(key(x, y))) continue;
         // The miner stands on this tile all its life, so it has to be clear of any trapped keeper.
         if (!isSafe(new RoomPosition(x, y, ctx.room.name))) continue;
         const range = ctx.anchor.getRangeTo(x, y);
@@ -221,7 +270,9 @@ function planRoads(ctx: PlanContext): void {
     );
     for (const step of path) {
       if (ctx.roadBudget <= 0) return;
-      if (!ctx.occupied.has(key(step.x, step.y)) && isSafe(step)) place(ctx, step.x, step.y, STRUCTURE_ROAD);
+      if (!ctx.occupied.has(key(step.x, step.y)) && isSafe(step) && !isContested(step)) {
+        place(ctx, step.x, step.y, STRUCTURE_ROAD);
+      }
     }
   }
 }
@@ -248,6 +299,27 @@ function roadCosts(roomName: string): CostMatrix | false {
 }
 
 /**
+ * Removes our construction sites (other than lair walls) in reach of an unwalled keeper. They
+ * could only be worked between keeper lives, and the source they serve isn't usable yet anyway.
+ */
+function removeContestedSites(room: Room): void {
+  for (const site of room.find(FIND_MY_CONSTRUCTION_SITES)) {
+    if (site.structureType !== STRUCTURE_WALL && isContested(site.pos)) site.remove();
+  }
+}
+
+/**
+ * Removes our construction sites no creep can get next to, e.g. one placed in a pocket of walls
+ * by an earlier version. Left alone, they'd count as pending forever and block a replacement.
+ */
+function removeUnreachableSites(ctx: PlanContext): void {
+  for (const site of ctx.room.find(FIND_MY_CONSTRUCTION_SITES)) {
+    const { x, y } = site.pos;
+    if (!ctx.reachable.has(key(x, y)) && !touchesReachable(ctx, x, y)) site.remove();
+  }
+}
+
+/**
  * Places construction sites for whatever the room's RCL allows but doesn't have yet.
  * Builders pick them up in the order set by utils/construction.ts.
  */
@@ -256,7 +328,9 @@ export function runPlanner(room: Room): void {
   const spawn = room.find(FIND_MY_SPAWNS)[0];
   if (!spawn) return;
 
+  removeContestedSites(room);
   const ctx = createContext(room, spawn.pos);
+  removeUnreachableSites(ctx);
 
   // Lair walls and source containers go first: with only MAX_PENDING_SITES at a time,
   // extensions would otherwise take every slot. Walls unlock at RCL 2 (allowance checks).

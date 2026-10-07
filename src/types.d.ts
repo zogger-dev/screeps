@@ -9,6 +9,15 @@
  */
 type CreepType = "drone" | "miner" | "worker" | "hauler";
 
+/**
+ * A hauler's committed delivery: filling the spawn, extensions or a tower, stocking a container or
+ * storage (`id` is the structure), or feeding a creep working at a site (`id` is its name).
+ */
+interface Dropoff {
+  kind: "fill" | "stock" | "feed";
+  id: string;
+}
+
 /** What a drone spends a load on. See logistics/network.ts. */
 type SinkKind = "fill" | "tower" | "build" | "repair" | "upgrade";
 
@@ -21,6 +30,11 @@ interface Route {
   kind: SinkKind;
   /** The site, tower or structure it works on; unset for fill and upgrade. */
   target?: Id<RouteTarget>;
+  /**
+   * Where to wait when the supply is busy, if it sits behind a choke: the first wide tile on the
+   * way back from it. Waiting inside a choke would block it. See logistics/traffic.ts.
+   */
+  hold?: { x: number; y: number };
 }
 
 /** The source a miner mines or a hauler empties. */
@@ -40,6 +54,10 @@ interface CreepMemory {
   post?: Post;
   /** drone: its current route, set by managers/logistics.ts. */
   route?: Route;
+  /** hauler: where it's taking its load; kept until delivered there. See roles/hauler.ts. */
+  dropoff?: Dropoff;
+  /** hauler: where it's loading from; kept until that's empty. */
+  pickup?: Id<Resource | Tombstone | Ruin | StructureContainer | StructureStorage>;
 }
 
 interface Memory {

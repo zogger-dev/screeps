@@ -4,6 +4,7 @@ import { haulersNeeded, isStaticSource, sourceIncome } from "../utils/mining";
 import { safeSources } from "../utils/safety";
 import { setting } from "../utils/settings";
 import { controllerContainer } from "../utils/sources";
+import { isWall } from "../utils/terrain";
 import { wantedDrones } from "./logistics";
 
 interface Step {
@@ -21,7 +22,7 @@ function upgradeSpots(controller: StructureController, container: StructureConta
     for (let dy = -1; dy <= 1; dy++) {
       const x = container.pos.x + dx;
       const y = container.pos.y + dy;
-      if (terrain.get(x, y) !== TERRAIN_MASK_WALL && controller.pos.getRangeTo(x, y) <= 3) spots++;
+      if (!isWall(terrain, x, y) && controller.pos.getRangeTo(x, y) <= 3) spots++;
     }
   }
   return spots;

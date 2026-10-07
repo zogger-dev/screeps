@@ -31,7 +31,7 @@ src/
   main.ts            game loop: memory cleanup -> per-room managers -> per-creep roles
   types.d.ts         Memory typings (CreepMemory, Role)
   bodies/            body tiers per creep type, one file each (drone, miner, worker, hauler)
-  logistics/         energy flow network and drone route assignment (see docs/logistics.md)
+  logistics/         energy flow network, lane capacity, route assignment, traffic (docs/logistics.md)
   managers/
     logistics.ts     re-plans drone routes every 50 ticks or when one goes stale
     planner.ts       places construction sites for what the room's RCL allows
@@ -42,7 +42,8 @@ src/
     drone.ts         WORK~CARRY: runs its planned route (load at a supply, spend on a sink)
     miner.ts         5 WORK, no CARRY: sits on a source container and mines
     worker.ts        WORK-heavy, 1 CARRY: stands by the controller container and upgrades
-    hauler.ts        CARRY+MOVE: source container -> spawn/extensions/towers/controller container
+    hauler.ts        CARRY+MOVE: source container -> spawn/extensions/towers/controller container,
+                     then feeds creeps working at sites
   utils/
     census.ts        per-tick creep lists by home room
     construction.ts  build order for construction sites
@@ -55,6 +56,7 @@ src/
     safety.ts        danger zones around hostiles and keeper lairs, safe movement
     settings.ts      tuning knobs overridable from the console
     sources.ts       harvest spots, source and controller containers
+    terrain.ts       wall test (terrain is a bitmask)
 ```
 
 ### Creep types and the economy
@@ -64,7 +66,7 @@ makes it better at some. Drones cover for missing miners and workers.
 
 | Type       | Tiers (energy cost)                                 | Best at                                                       |
 | ---------- | --------------------------------------------------- | ------------------------------------------------------------- |
-| drone      | (2W 1C 1M) x1-4: 300, 600, 900, 1200                | Anything: fill spawn (until haulers exist), upgrade, build, repair, harvest |
+| drone      | 2W 1C 1M (300); 3W 2C 3M (550); (2W 1C 1M) x2-4: 600, 900, 1200 | Anything: fill spawn (until haulers exist), upgrade, build, repair, harvest |
 | miner      | 5W 1M (550), never bigger                           | Mining a source from its container (RCL 2+)                   |
 | worker     | 6W 1C 3M (800); 10W 1C 3M (1200); 15W 2C 4M (1800) | Upgrading from the controller container (RCL 3+)              |
 | hauler     | (1C 1M) x2-16: 200 ... 1600                          | Source container -> spawn/extensions/towers -> controller container |
@@ -84,7 +86,7 @@ The drone/worker mix is meant to be experimented with. Override any knob from th
 console; unset keys use the defaults in `utils/settings.ts`:
 
 ```js
-Memory.settings = { minDrones: 2, maxDrones: 20, spotUtilization: 0.5, minRouteReturn: 2, showRoutes: true, upgradeShare: 0.6 };
+Memory.settings = { minDrones: 2, maxDrones: 20, spotUtilization: 0.5, minRouteReturn: 3, showRoutes: true, upgradeShare: 0.6 };
 ```
 
 ### Drone logistics
@@ -92,7 +94,9 @@ Memory.settings = { minDrones: 2, maxDrones: 20, spotUtilization: 0.5, minRouteR
 Drones don't pick their own work: a planner (`logistics/`, run by `managers/logistics.ts`) models
 the room as a flow network of supplies (sources without a miner, containers, storage) and sinks
 (spawn refill, towers, construction, repairs, the controller), and gives each drone a route:
-where to load and what to spend on. Within each priority level it takes the cheapest routes in
+where to load and what to spend on. Capacity lives on the terrain: every tile has lanes (its
+cross-section), and the routes through a choke share them. Drones wait for busy supplies at hold
+points outside chokes, never inside. Within each priority level it takes the cheapest routes in
 creep-time per unit of energy, so nearby work is served first and equal-priority sites share
 drones. The spawner builds as many drones as the plan can use (within `minDrones`..`maxDrones`);
 drones left without a route are recycled. Set `showRoutes: true` to draw the plan in the room, or
@@ -105,7 +109,8 @@ Keepers spawn on their lair's tile, only ever walk to their source, and never at
 From RCL 2 the planner walls every open tile around each lair; builders put those walls up first
 (priority -1, 1 energy each) during the window after the tower kills a keeper. The next keeper
 spawns trapped, and from then on only tiles within 3 of the lair (its ranged attack) are unsafe,
-which can free up the guarded source. Towers stop shooting trapped keepers. Only possible in rooms
+which can free up the guarded source. Until the lair is enclosed, nothing else is planned or routed near it or its source (and stray
+sites there are removed). Towers stop shooting trapped keepers. Only possible in rooms
 we own; real Source Keeper rooms can't be claimed.
 
 ### Build priorities

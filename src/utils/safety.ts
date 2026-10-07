@@ -1,4 +1,5 @@
-import { isEnclosed, isTrappedKeeper, keeperLairs } from "./lairs";
+import { isEnclosed, isGuardedByOpenLair, isTrappedKeeper, keeperLairs } from "./lairs";
+import { isWall } from "./terrain";
 
 /** Anything within this range of a roaming threat is considered unsafe. */
 const DANGER_RANGE = 5;
@@ -57,9 +58,13 @@ export function isSafe(pos: RoomPosition, margin = 0): boolean {
   return !threats(room).some((t) => t.pos.inRangeTo(pos, t.range + margin));
 }
 
-/** Sources creeps can work: one tile of margin, since harvesters stand next to the source. */
+/**
+ * Sources creeps can work: safe with one tile of margin, since harvesters stand next to the
+ * source. A source guarded by a lair that isn't walled in yet doesn't count even between keeper
+ * lives: nothing gets planned or routed there until the danger is contained.
+ */
 export function safeSources(room: Room): Source[] {
-  return room.find(FIND_SOURCES).filter((s) => isSafe(s.pos, 1));
+  return room.find(FIND_SOURCES).filter((s) => isSafe(s.pos, 1) && !isGuardedByOpenLair(s));
 }
 
 /** Adds danger-zone costs to a cost matrix. Usable as a moveTo costCallback. */
@@ -71,7 +76,7 @@ export function avoidThreats(roomName: string, matrix: CostMatrix): void {
     for (let x = Math.max(0, t.x - range); x <= Math.min(49, t.x + range); x++) {
       for (let y = Math.max(0, t.y - range); y <= Math.min(49, t.y + range); y++) {
         // A non-zero matrix value overrides terrain, so never touch walls or we'd make them walkable.
-        if (terrain.get(x, y) === TERRAIN_MASK_WALL) continue;
+        if (isWall(terrain, x, y)) continue;
         matrix.set(x, y, Math.max(matrix.get(x, y), DANGER_COST));
       }
     }
