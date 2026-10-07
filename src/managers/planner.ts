@@ -1,3 +1,4 @@
+import { keeperLairs, lairWallSpots } from "../utils/lairs";
 import { avoidThreats, isSafe, safeSources } from "../utils/safety";
 import { sourceContainer } from "../utils/sources";
 
@@ -149,6 +150,8 @@ function planSourceContainers(ctx: PlanContext): void {
         const y = source.pos.y + dy;
         if (x < 1 || x > 48 || y < 1 || y > 48) continue;
         if (ctx.terrain.get(x, y) === TERRAIN_MASK_WALL || ctx.occupied.has(key(x, y))) continue;
+        // The miner stands on this tile all its life, so it has to be clear of any trapped keeper.
+        if (!isSafe(new RoomPosition(x, y, ctx.room.name))) continue;
         const range = ctx.anchor.getRangeTo(x, y);
         if (range < bestRange) {
           best = [x, y];
@@ -157,6 +160,21 @@ function planSourceContainers(ctx: PlanContext): void {
       }
     }
     if (best) place(ctx, best[0], best[1], STRUCTURE_CONTAINER);
+  }
+}
+
+/**
+ * Walls on every open tile around each keeper lair, trapping future keepers on the lair. Builders
+ * only reach these sites while the keeper is dead (see isSafe), and build them first (see
+ * utils/construction.ts).
+ */
+function planLairWalls(ctx: PlanContext): void {
+  if (allowance(ctx, STRUCTURE_WALL) <= 0) return;
+  for (const lair of keeperLairs(ctx.room)) {
+    for (const pos of lairWallSpots(lair)) {
+      if (ctx.budget <= 0) return;
+      if (!ctx.occupied.has(key(pos.x, pos.y))) place(ctx, pos.x, pos.y, STRUCTURE_WALL);
+    }
   }
 }
 
@@ -240,8 +258,9 @@ export function runPlanner(room: Room): void {
 
   const ctx = createContext(room, spawn.pos);
 
-  // Source containers go first: with only MAX_PENDING_SITES at a time, extensions would
-  // otherwise take every slot and delay the switch to static miners.
+  // Lair walls and source containers go first: with only MAX_PENDING_SITES at a time,
+  // extensions would otherwise take every slot. Walls unlock at RCL 2 (allowance checks).
+  planLairWalls(ctx);
   if (ctx.rcl >= INFRASTRUCTURE_RCL) planSourceContainers(ctx);
   planGrid(ctx);
   if (ctx.rcl >= INFRASTRUCTURE_RCL) {

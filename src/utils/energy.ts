@@ -1,5 +1,6 @@
 import { isSafe, moveSafely, safeSources } from "./safety";
 import { hasStaticUpgraders, isCovered } from "./mining";
+import { cachedTravelCost, travelCost } from "./paths";
 import { controllerContainer, harvestSpots, isSourceContainer } from "./sources";
 
 /**
@@ -9,6 +10,8 @@ import { controllerContainer, harvestSpots, isSourceContainer } from "./sources"
 export function updateWorking(creep: Creep): boolean {
   if (creep.memory.working && creep.store[RESOURCE_ENERGY] === 0) {
     creep.memory.working = false;
+    // Re-pick a source each trip, since the best round trip changes with where the creep is.
+    delete creep.memory.sourceId;
   } else if (!creep.memory.working && creep.store.getFreeCapacity() === 0) {
     creep.memory.working = true;
   }
@@ -16,10 +19,13 @@ export function updateWorking(creep: Creep): boolean {
 }
 
 /**
- * Picks the candidate source with the most unclaimed harvest spots and remembers it.
- * Reassigns if the remembered source is no longer a candidate (e.g. it became dangerous).
+ * Picks the source with the cheapest round trip, creep -> source -> `destination` (where the
+ * energy will be spent), among those with a free harvest spot. So nearby sources fill up first
+ * and long or swampy walks are only made once they're saturated. If every source is full, picks
+ * the one with the most room left. Remembers the choice for the trip, and reassigns if the
+ * source is no longer a candidate (e.g. it became dangerous).
  */
-function assignSource(creep: Creep, sources: Source[]): Source | null {
+function assignSource(creep: Creep, sources: Source[], destination?: () => RoomPosition): Source | null {
   const existing = creep.memory.sourceId && Game.getObjectById(creep.memory.sourceId);
   if (existing && sources.some((s) => s.id === existing.id)) return existing;
 
@@ -34,15 +40,32 @@ function assignSource(creep: Creep, sources: Source[]): Source | null {
     const id = other.memory.type === "miner" ? other.memory.post : other.memory.sourceId;
     if (id && counts.has(id)) counts.set(id, counts.get(id)! + 1);
   }
+  // This creep's own previous claim was cleared at the start of the trip, so it isn't counted.
   const free = (s: Source) => harvestSpots(s) - counts.get(s.id)!;
-  const source = sources.reduce((best, s) => (free(s) > free(best) ? s : best));
+  const open = sources.filter((s) => free(s) > 0);
+  let source: Source;
+  if (open.length > 0) {
+    const dest = destination?.();
+    const trip = (s: Source) => travelCost(creep.pos, s.pos) + (dest ? cachedTravelCost(s.pos, dest) : 0);
+    const costs = new Map(open.map((s) => [s.id, trip(s)]));
+    source = open.reduce((best, s) => (costs.get(s.id)! < costs.get(best.id)! ? s : best));
+  } else {
+    source = sources.reduce((best, s) => (free(s) > free(best) ? s : best));
+  }
   creep.memory.sourceId = source.id;
   return source;
 }
 
-/** Mines the creep's assigned source. Returns false if no candidate source is available. */
-export function harvestAssignedSource(creep: Creep, sources = safeSources(creep.room)): boolean {
-  const source = assignSource(creep, sources);
+/**
+ * Mines the creep's assigned source. `destination` (evaluated only when picking a new source) is
+ * where the energy will be spent. Returns false if no candidate source is available.
+ */
+export function harvestAssignedSource(
+  creep: Creep,
+  sources = safeSources(creep.room),
+  destination?: () => RoomPosition,
+): boolean {
+  const source = assignSource(creep, sources, destination);
   if (!source) return false;
   if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
     moveSafely(creep, source, { visualizePathStyle: { stroke: "#ffaa00" } });
@@ -114,10 +137,10 @@ export function takeEnergy(creep: Creep, target: LooseEnergy | StructureContaine
 
 /**
  * Drone energy: decaying energy (piles, tombstones, ruins), then storage/containers, then mining
- * a source that miners haven't taken over. The controller container is left alone once workers
- * work from it.
+ * a source that miners haven't taken over (picked by round trip to `destination`, where the
+ * energy will be spent). The controller container is left alone once workers work from it.
  */
-export function collectEnergy(creep: Creep): void {
+export function collectEnergy(creep: Creep, destination?: () => RoomPosition): void {
   const loose = findLooseEnergy(creep);
   if (loose) {
     takeEnergy(creep, loose);
@@ -137,5 +160,5 @@ export function collectEnergy(creep: Creep): void {
     return;
   }
 
-  harvestAssignedSource(creep, safeSources(creep.room).filter((s) => !isCovered(s)));
+  harvestAssignedSource(creep, safeSources(creep.room).filter((s) => !isCovered(s)), destination);
 }

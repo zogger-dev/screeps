@@ -68,6 +68,23 @@ function pickTask(creep: Creep): WorkerTask {
   return "upgrade";
 }
 
+/** Where a drone will most likely spend its next load, so it can harvest on the way there. */
+function expectedDestination(creep: Creep): RoomPosition {
+  const room = creep.room;
+  switch (pickTask(creep)) {
+    case "build": {
+      const site = pickSite(creep, room.find(FIND_MY_CONSTRUCTION_SITES, { filter: (s) => isSafe(s.pos) }));
+      if (site) return site.pos;
+      break;
+    }
+    case "upgrade":
+      if (room.controller) return room.controller.pos;
+      break;
+  }
+  // Filling, repairs (spread out, usually around the base) and fallbacks: the spawn.
+  return room.find(FIND_MY_SPAWNS)[0]?.pos ?? creep.pos;
+}
+
 /**
  * All-rounder: gathers energy, then spends each load on whatever the room needs most. Covers for
  * missing miners and workers: it harvests sources without a miner, and upgrades when nobody else is.
@@ -76,7 +93,7 @@ export const drone: RoleDef = {
   run(creep) {
     if (!updateWorking(creep)) {
       delete creep.memory.task;
-      collectEnergy(creep);
+      collectEnergy(creep, () => expectedDestination(creep));
       return;
     }
 

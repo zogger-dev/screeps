@@ -30,6 +30,7 @@ To try it in the **Simulation** room, deploy, then select that branch in the Scr
 src/
   main.ts            game loop: memory cleanup -> per-room managers -> per-creep roles
   types.d.ts         Memory typings (CreepMemory, Role)
+  bodies/            body tiers per creep type, one file each (drone, miner, worker, hauler)
   managers/
     planner.ts       places construction sites for what the room's RCL allows
     retirement.ts    walks surplus/outdated creeps to a spawn to be recycled
@@ -41,12 +42,14 @@ src/
     worker.ts    WORK-heavy, 1 CARRY: stands by the controller container and upgrades
     hauler.ts        CARRY+MOVE: source container -> spawn/extensions/towers/controller container
   utils/
-    body.ts          body tiers per creep type
     census.ts        per-tick creep lists by home room
     construction.ts  build order for construction sites
     energy.ts        working-state toggle, source assignment, energy collection
+    lairs.ts         keeper lair walling: wall spots, enclosure, trapped keepers
     memory.ts        dead-creep / finished-site memory cleanup
     mining.ts        when a source goes static, income, hauler counts
+    paths.ts         travel cost between points (roads, swamps, danger zones)
+    repair.ts        which structures are worth repairing
     safety.ts        danger zones around hostiles and keeper lairs, safe movement
     settings.ts      tuning knobs overridable from the console
     sources.ts       harvest spots, source and controller containers
@@ -64,7 +67,7 @@ makes it better at some. Drones cover for missing miners and workers.
 | worker     | 6W 1C 3M (800); 10W 1C 3M (1200); 15W 2C 4M (1800) | Upgrading from the controller container (RCL 3+)              |
 | hauler     | (1C 1M) x2-16: 200 ... 1600                          | Source container -> spawn/extensions/towers -> controller container |
 
-Bodies grow in tiers (`utils/body.ts`); the spawner always builds the biggest tier the room can
+Bodies grow in tiers (`src/bodies/`); the spawner always builds the biggest tier the room can
 afford. Outdated creeps keep working until up-to-date replacements cover their job, then walk to a
 spawn and get recycled.
 
@@ -82,10 +85,19 @@ console; unset keys use the defaults in `utils/settings.ts`:
 Memory.settings = { minDrones: 2, builders: 2, upgradeShare: 0.6 };
 ```
 
+### Keeper lairs
+
+Keepers spawn on their lair's tile, only ever walk to their source, and never attack structures.
+From RCL 2 the planner walls every open tile around each lair; builders put those walls up first
+(priority -1, 1 energy each) during the window after the tower kills a keeper. The next keeper
+spawns trapped, and from then on only tiles within 3 of the lair (its ranged attack) are unsafe,
+which can free up the guarded source. Towers stop shooting trapped keepers. Only possible in rooms
+we own; real Source Keeper rooms can't be claimed.
+
 ### Build priorities
 
 Builders work on the highest-priority site first (lower number = sooner), closest first among ties.
-Defaults by type: spawn 0, extension 1, container 1, tower 2, storage 4, other 10, road 20, rampart 30, wall 31.
+Defaults by type: lair walls -1, spawn 0, extension 1, container 1, tower 2, storage 4, other 10, road 20, rampart 30, wall 31.
 Override a single site from the in-game console:
 
 ```js
@@ -97,6 +109,6 @@ Overrides are cleaned up automatically once the site is finished.
 
 ### Adding a creep type
 
-1. Add the name to the `CreepType` union in `src/types.d.ts` and its tiers in `utils/body.ts`.
+1. Add the name to the `CreepType` union in `src/types.d.ts` and its tiers in `src/bodies/<name>.ts` (registered in `src/bodies/index.ts`).
 2. Create `src/roles/<name>.ts` exporting a `RoleDef`.
 3. Register it in `src/roles/index.ts` and give it steps in `managers/spawner.ts`.

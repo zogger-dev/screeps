@@ -1,4 +1,4 @@
-import { bestTier, tierBody } from "./body";
+import { bestTier, tierBody } from "../bodies";
 import { homeCreeps } from "./census";
 import { sourceContainer } from "./sources";
 

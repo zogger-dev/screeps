@@ -1,39 +1,65 @@
-/** Anything within this range of a threat is considered unsafe. */
+import { isEnclosed, isTrappedKeeper, keeperLairs } from "./lairs";
+
+/** Anything within this range of a roaming threat is considered unsafe. */
 const DANGER_RANGE = 5;
+/** A keeper trapped on its lair can't move, so only its ranged attack reaches out. */
+const TRAPPED_KEEPER_RANGE = 3;
+/**
+ * An open lair becomes dangerous this many ticks before its keeper respawns, leaving creeps time
+ * to walk clear. Before that, with the keeper dead, its area is safe to work in.
+ */
+const LAIR_WARNING_TICKS = 50;
 /** Path cost for unsafe tiles: high enough to route around, but not impassable so creeps can still escape. */
 const DANGER_COST = 250;
 
-let cacheTick = -1;
-const threatCache = new Map<string, RoomPosition[]>();
+interface Threat {
+  pos: RoomPosition;
+  range: number;
+}
 
-/** Positions of armed hostile creeps and keeper lairs (keepers respawn there). Cached per tick. */
-function threats(room: Room): RoomPosition[] {
+let cacheTick = -1;
+const threatCache = new Map<string, Threat[]>();
+
+/**
+ * Armed hostile creeps, plus keeper lairs. A live keeper is covered as a hostile creep; a lair
+ * adds danger only when an open one is about to respawn its keeper, or permanently around an
+ * enclosed one (whose keeper, present or next, can only reach its ranged-attack range).
+ * Cached per tick.
+ */
+function threats(room: Room): Threat[] {
   if (cacheTick !== Game.time) {
     threatCache.clear();
     cacheTick = Game.time;
   }
   let result = threatCache.get(room.name);
   if (!result) {
-    const hostiles = room.find(FIND_HOSTILE_CREEPS, {
-      filter: (c) => c.getActiveBodyparts(ATTACK) > 0 || c.getActiveBodyparts(RANGED_ATTACK) > 0,
-    });
-    const lairs = room.find(FIND_STRUCTURES, {
-      filter: (s) => s.structureType === STRUCTURE_KEEPER_LAIR,
-    });
-    result = [...hostiles, ...lairs].map((o) => o.pos);
+    result = room
+      .find(FIND_HOSTILE_CREEPS, {
+        filter: (c) => c.getActiveBodyparts(ATTACK) > 0 || c.getActiveBodyparts(RANGED_ATTACK) > 0,
+      })
+      .map((c) => ({ pos: c.pos, range: isTrappedKeeper(c) ? TRAPPED_KEEPER_RANGE : DANGER_RANGE }));
+    for (const lair of keeperLairs(room)) {
+      if (isEnclosed(lair)) {
+        result.push({ pos: lair.pos, range: TRAPPED_KEEPER_RANGE });
+      } else if (lair.ticksToSpawn !== undefined && lair.ticksToSpawn <= LAIR_WARNING_TICKS) {
+        result.push({ pos: lair.pos, range: DANGER_RANGE });
+      }
+    }
     threatCache.set(room.name, result);
   }
   return result;
 }
 
-export function isSafe(pos: RoomPosition): boolean {
+/** True if no threat reaches `pos`, with `margin` extra tiles of clearance. */
+export function isSafe(pos: RoomPosition, margin = 0): boolean {
   const room = Game.rooms[pos.roomName];
   if (!room) return true;
-  return !threats(room).some((t) => t.inRangeTo(pos, DANGER_RANGE));
+  return !threats(room).some((t) => t.pos.inRangeTo(pos, t.range + margin));
 }
 
+/** Sources creeps can work: one tile of margin, since harvesters stand next to the source. */
 export function safeSources(room: Room): Source[] {
-  return room.find(FIND_SOURCES).filter((s) => isSafe(s.pos));
+  return room.find(FIND_SOURCES).filter((s) => isSafe(s.pos, 1));
 }
 
 /** Adds danger-zone costs to a cost matrix. Usable as a moveTo costCallback. */
@@ -41,9 +67,9 @@ export function avoidThreats(roomName: string, matrix: CostMatrix): void {
   const room = Game.rooms[roomName];
   if (!room) return;
   const terrain = room.getTerrain();
-  for (const t of threats(room)) {
-    for (let x = Math.max(0, t.x - DANGER_RANGE); x <= Math.min(49, t.x + DANGER_RANGE); x++) {
-      for (let y = Math.max(0, t.y - DANGER_RANGE); y <= Math.min(49, t.y + DANGER_RANGE); y++) {
+  for (const { pos: t, range } of threats(room)) {
+    for (let x = Math.max(0, t.x - range); x <= Math.min(49, t.x + range); x++) {
+      for (let y = Math.max(0, t.y - range); y <= Math.min(49, t.y + range); y++) {
         // A non-zero matrix value overrides terrain, so never touch walls or we'd make them walkable.
         if (terrain.get(x, y) === TERRAIN_MASK_WALL) continue;
         matrix.set(x, y, Math.max(matrix.get(x, y), DANGER_COST));

@@ -1,4 +1,4 @@
-import { bestTier, isOutdated, tierBody } from "../utils/body";
+import { bestTier, isOutdated, tierBody } from "../bodies";
 import { homeCreeps } from "../utils/census";
 import { haulersNeeded, isStaticSource, sourceIncome } from "../utils/mining";
 import { needsRepair } from "../utils/repair";
