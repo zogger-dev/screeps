@@ -31,20 +31,22 @@ src/
   main.ts            game loop: memory cleanup -> per-room managers -> per-creep roles
   types.d.ts         Memory typings (CreepMemory, Role)
   bodies/            body tiers per creep type, one file each (drone, miner, worker, hauler)
+  logistics/         energy flow network and drone route assignment (see docs/logistics.md)
   managers/
+    logistics.ts     re-plans drone routes every 50 ticks or when one goes stale
     planner.ts       places construction sites for what the room's RCL allows
     retirement.ts    walks surplus/outdated creeps to a spawn to be recycled
     spawner.ts       demand-based spawn queue per post, tier upgrades, recovery, spawn labels
     towers.ts        defend / heal
   roles/             one file per creep type, registered in roles/index.ts
-    drone.ts    WORK~CARRY: gathers, then fills/builds/repairs/upgrades by need
+    drone.ts         WORK~CARRY: runs its planned route (load at a supply, spend on a sink)
     miner.ts         5 WORK, no CARRY: sits on a source container and mines
-    worker.ts    WORK-heavy, 1 CARRY: stands by the controller container and upgrades
+    worker.ts        WORK-heavy, 1 CARRY: stands by the controller container and upgrades
     hauler.ts        CARRY+MOVE: source container -> spawn/extensions/towers/controller container
   utils/
     census.ts        per-tick creep lists by home room
     construction.ts  build order for construction sites
-    energy.ts        working-state toggle, source assignment, energy collection
+    energy.ts        working-state toggle, delivery, decaying-energy pickup
     lairs.ts         keeper lair walling: wall spots, enclosure, trapped keepers
     memory.ts        dead-creep / finished-site memory cleanup
     mining.ts        when a source goes static, income, hauler counts
@@ -82,22 +84,20 @@ The drone/worker mix is meant to be experimented with. Override any knob from th
 console; unset keys use the defaults in `utils/settings.ts`:
 
 ```js
-Memory.settings = { minDrones: 2, builders: 2, upgradeShare: 0.6 };
+Memory.settings = { minDrones: 2, maxDrones: 20, spotUtilization: 0.5, minRouteReturn: 2, showRoutes: true, upgradeShare: 0.6 };
 ```
 
-### Drones and sources
+### Drone logistics
 
-Each source gets a drone capacity: a drone mines until its CARRY is full, then leaves on a round
-trip, so a source supports `spots x cycle / mining time` drones before they queue for spots and
-`regen x cycle / CARRY` before they drain it (cycle = mining time + round trip to the spawn).
-Drones keep their source until it's unsafe or over capacity;
-new drones take the cheapest round trip among sources with room, so nearby sources fill first.
-
-While a source's container is a construction site, one drone is stationed there: it harvests and
-builds the container in place until it's done, with no transit. It holds a spot full-time and
-draws its mining rate, and the capacity for other drones is computed from what's left, so a
-single-spot source is reserved for its builder. Other builders spread across the highest-priority
-sites (fewest builders first, nearest first) and stick with a site until it's done or outranked.
+Drones don't pick their own work: a planner (`logistics/`, run by `managers/logistics.ts`) models
+the room as a flow network of supplies (sources without a miner, containers, storage) and sinks
+(spawn refill, towers, construction, repairs, the controller), and gives each drone a route:
+where to load and what to spend on. Within each priority level it takes the cheapest routes in
+creep-time per unit of energy, so nearby work is served first and equal-priority sites share
+drones. The spawner builds as many drones as the plan can use (within `minDrones`..`maxDrones`);
+drones left without a route are recycled. Set `showRoutes: true` to draw the plan in the room, or
+run `logistics("sim")` in the console to print the supplies, sinks and routes.
+See [docs/logistics.md](docs/logistics.md) for the model and what's next.
 
 ### Keeper lairs
 

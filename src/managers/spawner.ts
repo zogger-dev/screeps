@@ -1,10 +1,10 @@
 import { bestTier, isOutdated, tierBody } from "../bodies";
 import { homeCreeps } from "../utils/census";
-import { droneCapacity, haulersNeeded, isStaticSource, sourceIncome } from "../utils/mining";
-import { needsRepair } from "../utils/repair";
+import { haulersNeeded, isStaticSource, sourceIncome } from "../utils/mining";
 import { safeSources } from "../utils/safety";
 import { setting } from "../utils/settings";
 import { controllerContainer } from "../utils/sources";
+import { wantedDrones } from "./logistics";
 
 interface Step {
   type: CreepType;
@@ -55,13 +55,10 @@ function plan(room: Room): Step[] {
   const container = controllerContainer(room);
   const upgraders = container && staticSources.length > 0 ? workers(room, staticSources, container) : 0;
 
-  // Drones: as many as the sources they still harvest can keep busy, plus builders while there
-  // are sites, plus one to upgrade until workers take over; never fewer than minDrones.
-  const harvesting = harvestSources.reduce((sum, s) => sum + droneCapacity(s), 0);
-  const hasSites = room.find(FIND_MY_CONSTRUCTION_SITES).length > 0;
-  const hasRepairs = room.find(FIND_STRUCTURES, { filter: needsRepair }).length > 0;
-  const projects = hasSites ? setting("builders") : hasRepairs ? 1 : 0;
-  const drones = Math.max(setting("minDrones"), harvesting + projects + (upgraders > 0 ? 0 : 1));
+  // Drones: as many as the logistics plan can put to use (it plans for hypothetical drones and
+  // counts how many get a route), within minDrones..maxDrones. Before the first plan, minDrones.
+  const minDrones = setting("minDrones");
+  const drones = Math.min(setting("maxDrones"), Math.max(minDrones, wantedDrones(room.name) ?? minDrones));
 
   const steps: Step[] = [];
   for (const s of staticSources) {

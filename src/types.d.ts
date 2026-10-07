@@ -9,7 +9,19 @@
  */
 type CreepType = "drone" | "miner" | "worker" | "hauler";
 
-type WorkerTask = "fill" | "build" | "repair" | "upgrade";
+/** What a drone spends a load on. See logistics/network.ts. */
+type SinkKind = "fill" | "tower" | "build" | "repair" | "upgrade";
+
+type RouteTarget = ConstructionSite | StructureTower | Structure;
+
+/** A drone's assignment from the logistics planner: where it loads and what it spends on. */
+interface Route {
+  /** A Source to harvest, or a container/storage to withdraw from. */
+  from: Id<Source | StructureContainer | StructureStorage>;
+  kind: SinkKind;
+  /** The site, tower or structure it works on; unset for fill and upgrade. */
+  target?: Id<RouteTarget>;
+}
 
 /** The source a miner mines or a hauler empties. */
 type Post = Id<Source>;
@@ -26,14 +38,8 @@ interface CreepMemory {
   retiring?: boolean;
   /** miner and hauler: which source this creep works. */
   post?: Post;
-  /** drone: source it harvests when nothing is stockpiled. Kept until the source is unsafe or over capacity. */
-  sourceId?: Id<Source>;
-  /** drone: the source whose container site it's building in place. See roles/drone.ts. */
-  station?: Id<Source>;
-  /** drone: construction site it's working on, kept until done or outranked. */
-  siteId?: Id<ConstructionSite>;
-  /** drone: what it's spending its current load on. */
-  task?: WorkerTask;
+  /** drone: its current route, set by managers/logistics.ts. */
+  route?: Route;
 }
 
 interface Memory {
@@ -44,10 +50,23 @@ interface Memory {
 }
 
 interface Settings {
-  /** Drones kept around at all times, for building, repairs and covering gaps. */
+  /** Drones kept around at all times, even when the logistics plan has no use for them. */
   minDrones: number;
-  /** Drones added while there are construction sites. */
-  builders: number;
+  /** Most drones the spawner will keep, however many the logistics plan could use. */
+  maxDrones: number;
+  /**
+   * Fraction of a single-spot source's time the logistics plan books. Creeps arrive in bunches,
+   * so a fully booked spot means a standing queue; sources with more spots are allowed higher
+   * utilization (square-root staffing, see logistics/assign.ts).
+   */
+  spotUtilization: number;
+  /**
+   * A route only gets a drone if it delivers at least this many times the drone's upkeep (body
+   * cost / 1500 per tick). Keeps small drones off long hauls, which miners and haulers do better.
+   */
+  minRouteReturn: number;
+  /** Draw the logistics plan's routes in the room. */
+  showRoutes: boolean;
   /** Share of static-source income spent by worker upgraders. */
   upgradeShare: number;
 }

@@ -1,4 +1,3 @@
-import { homeCreeps } from "./census";
 import { isLairWallSpot } from "./lairs";
 
 /** Default build order by structure type; lower builds first. Anything unlisted gets DEFAULT_PRIORITY. */
@@ -29,26 +28,4 @@ export function sitePriority(site: ConstructionSite): number {
   if (override !== undefined) return override;
   if (site.structureType === STRUCTURE_WALL && isLairWallSpot(site.pos)) return LAIR_WALL_PRIORITY;
   return TYPE_PRIORITY[site.structureType] ?? DEFAULT_PRIORITY;
-}
-
-/**
- * Picks a site among the highest-priority ones, spreading drones evenly across them: the one
- * with the fewest drones on it, nearest first. Source containers being built by a stationed
- * drone (see roles/drone.ts) are left to it.
- */
-export function pickSite(creep: Creep, sites: ConstructionSite[]): ConstructionSite | null {
-  const creeps = homeCreeps(creep.memory.room).filter((c) => c !== creep);
-  const stations = new Set(creeps.map((c) => c.memory.station).filter((id) => id !== undefined));
-  const open = sites.filter(
-    (s) =>
-      !(s.structureType === STRUCTURE_CONTAINER && s.pos.findInRange(FIND_SOURCES, 1).some((src) => stations.has(src.id))),
-  );
-  if (open.length === 0) return null;
-
-  const best = Math.min(...open.map(sitePriority));
-  const top = open.filter((s) => sitePriority(s) === best);
-  const workers = (s: ConstructionSite) => creeps.filter((c) => c.memory.siteId === s.id).length;
-  const fewest = Math.min(...top.map(workers));
-  const candidates = top.filter((s) => workers(s) === fewest);
-  return creep.pos.findClosestByPath(candidates) ?? candidates[0];
 }

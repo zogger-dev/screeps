@@ -1,9 +1,14 @@
+import { logisticsReport } from "./logistics/report";
+import { runLogistics } from "./managers/logistics";
 import { runPlanner } from "./managers/planner";
 import { runRetirement } from "./managers/retirement";
 import { runSpawner } from "./managers/spawner";
 import { runTowers } from "./managers/towers";
 import { roles } from "./roles";
 import { cleanMemory } from "./utils/memory";
+
+// Console helpers, e.g. `logistics("sim")`.
+Object.assign(globalThis, { logistics: logisticsReport });
 
 export const loop = (): void => {
   cleanMemory();
@@ -12,6 +17,7 @@ export const loop = (): void => {
     if (!room.controller?.my) continue;
     runPlanner(room);
     runSpawner(room);
+    runLogistics(room);
     runTowers(room);
   }
 

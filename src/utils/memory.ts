@@ -3,7 +3,7 @@
  * (harvester, upgrader, builder, miner, hauler) or the static/generalist/specialist types. Safe to delete once
  * those creeps have died out, 1500 ticks after deploy.
  */
-function migrate(memory: CreepMemory & { role?: string }): void {
+function migrate(memory: CreepMemory & { role?: string; sourceId?: Id<Source> }): void {
   const old = memory.role ?? (memory.type as string);
   switch (old) {
     case "miner":
