@@ -26,8 +26,12 @@ interface CreepMemory {
   retiring?: boolean;
   /** miner and hauler: which source this creep works. */
   post?: Post;
-  /** drone: source it harvests when nothing is stockpiled. */
+  /** drone: source it harvests when nothing is stockpiled. Kept until the source is unsafe or over capacity. */
   sourceId?: Id<Source>;
+  /** drone: the source whose container site it's building in place. See roles/drone.ts. */
+  station?: Id<Source>;
+  /** drone: construction site it's working on, kept until done or outranked. */
+  siteId?: Id<ConstructionSite>;
   /** drone: what it's spending its current load on. */
   task?: WorkerTask;
 }

@@ -85,6 +85,20 @@ console; unset keys use the defaults in `utils/settings.ts`:
 Memory.settings = { minDrones: 2, builders: 2, upgradeShare: 0.6 };
 ```
 
+### Drones and sources
+
+Each source gets a drone capacity: a drone mines until its CARRY is full, then leaves on a round
+trip, so a source supports `spots x cycle / mining time` drones before they queue for spots and
+`regen x cycle / CARRY` before they drain it (cycle = mining time + round trip to the spawn).
+Drones keep their source until it's unsafe or over capacity;
+new drones take the cheapest round trip among sources with room, so nearby sources fill first.
+
+While a source's container is a construction site, one drone is stationed there: it harvests and
+builds the container in place until it's done, with no transit. It holds a spot full-time and
+draws its mining rate, and the capacity for other drones is computed from what's left, so a
+single-spot source is reserved for its builder. Other builders spread across the highest-priority
+sites (fewest builders first, nearest first) and stick with a site until it's done or outranked.
+
 ### Keeper lairs
 
 Keepers spawn on their lair's tile, only ever walk to their source, and never attack structures.

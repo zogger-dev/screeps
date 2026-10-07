@@ -1,7 +1,7 @@
 import { isSafe, moveSafely, safeSources } from "./safety";
-import { hasStaticUpgraders, isCovered } from "./mining";
+import { droneCapacity, hasStaticUpgraders, isCovered } from "./mining";
 import { cachedTravelCost, travelCost } from "./paths";
-import { controllerContainer, harvestSpots, isSourceContainer } from "./sources";
+import { controllerContainer, isSourceContainer } from "./sources";
 
 /**
  * Flips creep.memory.working when the creep fills up or runs dry.
@@ -10,39 +10,44 @@ import { controllerContainer, harvestSpots, isSourceContainer } from "./sources"
 export function updateWorking(creep: Creep): boolean {
   if (creep.memory.working && creep.store[RESOURCE_ENERGY] === 0) {
     creep.memory.working = false;
-    // Re-pick a source each trip, since the best round trip changes with where the creep is.
-    delete creep.memory.sourceId;
   } else if (!creep.memory.working && creep.store.getFreeCapacity() === 0) {
     creep.memory.working = true;
   }
   return creep.memory.working;
 }
 
+/** Names of drones assigned to each source, sorted so every creep agrees on who's in excess. */
+function assignments(): Map<Id<Source>, string[]> {
+  const bySource = new Map<Id<Source>, string[]>();
+  for (const other of Object.values(Game.creeps)) {
+    const id = other.memory.sourceId;
+    if (id) bySource.set(id, [...(bySource.get(id) ?? []), other.name]);
+  }
+  for (const names of bySource.values()) names.sort();
+  return bySource;
+}
+
 /**
- * Picks the source with the cheapest round trip, creep -> source -> `destination` (where the
- * energy will be spent), among those with a free harvest spot. So nearby sources fill up first
- * and long or swampy walks are only made once they're saturated. If every source is full, picks
- * the one with the most room left. Remembers the choice for the trip, and reassigns if the
- * source is no longer a candidate (e.g. it became dangerous).
+ * Picks a source for the creep and keeps it: assignments only change when the source stops being
+ * a candidate (e.g. it became dangerous) or is over its drone capacity, in which case the excess
+ * drones move on. New picks take the cheapest round trip, creep -> source -> `destination` (where
+ * the energy will be spent), among sources below capacity. So nearby sources fill up first and
+ * long or swampy walks are only made once they're saturated. If every source is full, picks the
+ * one with the most room left.
  */
 function assignSource(creep: Creep, sources: Source[], destination?: () => RoomPosition): Source | null {
-  const existing = creep.memory.sourceId && Game.getObjectById(creep.memory.sourceId);
-  if (existing && sources.some((s) => s.id === existing.id)) return existing;
-
   if (sources.length === 0) {
     delete creep.memory.sourceId;
     return null;
   }
 
-  const counts = new Map<Id<Source>, number>(sources.map((s) => [s.id, 0]));
-  for (const other of Object.values(Game.creeps)) {
-    // Miners occupy a spot too; haulers are tied to a source but never stand on its spots.
-    const id = other.memory.type === "miner" ? other.memory.post : other.memory.sourceId;
-    if (id && counts.has(id)) counts.set(id, counts.get(id)! + 1);
-  }
-  // This creep's own previous claim was cleared at the start of the trip, so it isn't counted.
-  const free = (s: Source) => harvestSpots(s) - counts.get(s.id)!;
-  const open = sources.filter((s) => free(s) > 0);
+  const assigned = assignments();
+  const existing = creep.memory.sourceId && sources.find((s) => s.id === creep.memory.sourceId);
+  if (existing && (assigned.get(existing.id) ?? []).indexOf(creep.name) < droneCapacity(existing)) return existing;
+
+  const others = (s: Source) => (assigned.get(s.id) ?? []).filter((n) => n !== creep.name).length;
+  const room = (s: Source) => droneCapacity(s) - others(s);
+  const open = sources.filter((s) => room(s) > 0);
   let source: Source;
   if (open.length > 0) {
     const dest = destination?.();
@@ -50,7 +55,7 @@ function assignSource(creep: Creep, sources: Source[], destination?: () => RoomP
     const costs = new Map(open.map((s) => [s.id, trip(s)]));
     source = open.reduce((best, s) => (costs.get(s.id)! < costs.get(best.id)! ? s : best));
   } else {
-    source = sources.reduce((best, s) => (free(s) > free(best) ? s : best));
+    source = sources.reduce((best, s) => (room(s) > room(best) ? s : best));
   }
   creep.memory.sourceId = source.id;
   return source;
